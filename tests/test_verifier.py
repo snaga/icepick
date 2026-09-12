@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
+from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
+from icepick.config import Config
+from icepick.exceptions import AuthenticationError
 from icepick.verifier.equivalence import EquivalenceVerifier, VerificationResult
 
 
@@ -149,3 +155,243 @@ class TestEquivalenceVerifier:
         assert result.orig_not_in_opt_count == -1
         assert result.opt_not_in_orig_count == -1
         assert "Snowflake connection timeout" in (result.error_message or "")
+
+    def test_verify_with_snowflake_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test successful verification directly via mocked snowflake.connector."""
+        mock_connector = MagicMock()
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [
+            ("orig_not_in_opt", 0),
+            ("opt_not_in_orig", 0),
+        ]
+        mock_conn.cursor.return_value = mock_cursor
+        mock_connector.connect.return_value = mock_conn
+
+        monkeypatch.setattr(
+            "importlib.import_module",
+            lambda name: mock_connector if name == "snowflake.connector" else importlib.__import__(name),
+        )
+
+        verifier = EquivalenceVerifier()
+        config = Config(
+            snowflake_account="test_acct",
+            snowflake_user="test_user",
+            snowflake_password="test_password",
+            snowflake_database="test_db",
+            snowflake_warehouse="test_wh",
+            snowflake_schema="PUBLIC",
+            snowflake_role="ANALYST",
+        )
+
+        result = verifier.verify_with_snowflake(
+            "SELECT 1",
+            "SELECT 1",
+            config=config,
+        )
+
+        assert result.is_equivalent is True
+        assert result.orig_not_in_opt_count == 0
+        assert result.opt_not_in_orig_count == 0
+        assert result.error_message is None
+        mock_connector.connect.assert_called_once_with(
+            account="test_acct",
+            user="test_user",
+            password="test_password",
+            database="test_db",
+            warehouse="test_wh",
+            schema="PUBLIC",
+            role="ANALYST",
+        )
+        mock_cursor.execute.assert_called_once()
+        mock_conn.close.assert_called_once()
+
+    def test_verify_with_snowflake_missing_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that missing required connection credentials returns a failed result with error message."""
+        for key in [
+            "SNOWFLAKE_ACCOUNT",
+            "SNOWFLAKE_USER",
+            "SNOWFLAKE_PASSWORD",
+            "SNOWFLAKE_DATABASE",
+            "SNOWFLAKE_WAREHOUSE",
+        ]:
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(
+            "icepick.verifier.equivalence.resolve_credential",
+            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake_password")),
+        )
+
+        verifier = EquivalenceVerifier()
+        result = verifier.verify_with_snowflake(
+            "SELECT 1",
+            "SELECT 1",
+            config=Config(),
+        )
+
+        assert result.is_equivalent is False
+        assert result.orig_not_in_opt_count == -1
+        assert result.opt_not_in_orig_count == -1
+        assert "Missing required Snowflake connection parameter" in (result.error_message or "")
+
+    def test_verify_with_snowflake_missing_password_actionable_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test actionable error message when only password is missing."""
+        for key in ["SNOWFLAKE_PASSWORD", "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD"]:
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(
+            "icepick.verifier.equivalence.resolve_credential",
+            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake_password")),
+        )
+
+        verifier = EquivalenceVerifier()
+        config = Config(
+            snowflake_account="test_acct",
+            snowflake_user="test_user",
+            snowflake_database="test_db",
+            snowflake_warehouse="test_wh",
+        )
+        result = verifier.verify_with_snowflake("SELECT 1", "SELECT 1", config=config)
+
+        assert result.is_equivalent is False
+        assert "[Authentication Error] Credential for 'snowflake_password'" in (
+            result.error_message or ""
+        )
+
+    def test_verify_with_snowflake_missing_driver(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test graceful failure when snowflake-connector-python is not installed."""
+
+        def _mock_import(name: str) -> Any:
+            if name == "snowflake.connector":
+                raise ImportError("No module named 'snowflake'")
+            return importlib.__import__(name)
+
+        monkeypatch.setattr("importlib.import_module", _mock_import)
+
+        verifier = EquivalenceVerifier()
+        config = Config(
+            snowflake_account="test_acct",
+            snowflake_user="test_user",
+            snowflake_password="test_password",
+            snowflake_database="test_db",
+            snowflake_warehouse="test_wh",
+        )
+
+        result = verifier.verify_with_snowflake(
+            "SELECT 1",
+            "SELECT 1",
+            config=config,
+        )
+
+        assert result.is_equivalent is False
+        assert result.orig_not_in_opt_count == -1
+        assert "snowflake-connector-python is not installed" in (result.error_message or "")
+
+    def test_verify_with_snowflake_database_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test handling of database errors (e.g. ProgrammingError or connect failure)."""
+        mock_connector = MagicMock()
+        mock_connector.connect.side_effect = RuntimeError(
+            "SQL compilation error: Table 'FOO' does not exist"
+        )
+
+        monkeypatch.setattr(
+            "importlib.import_module",
+            lambda name: mock_connector if name == "snowflake.connector" else importlib.__import__(name),
+        )
+
+        verifier = EquivalenceVerifier()
+        config = Config(
+            snowflake_account="test_acct",
+            snowflake_user="test_user",
+            snowflake_password="test_password",
+            snowflake_database="test_db",
+            snowflake_warehouse="test_wh",
+        )
+
+        result = verifier.verify_with_snowflake(
+            "SELECT 1",
+            "SELECT 1",
+            config=config,
+        )
+
+        assert result.is_equivalent is False
+        assert result.orig_not_in_opt_count == -1
+        assert result.opt_not_in_orig_count == -1
+        assert "SQL compilation error" in (result.error_message or "")
+
+    def test_verify_with_snowflake_timeout_parameter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that timeout parameter is correctly propagated to session_parameters."""
+        mock_connector = MagicMock()
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [("orig_not_in_opt", 0), ("opt_not_in_orig", 0)]
+        mock_conn.cursor.return_value = mock_cursor
+        mock_connector.connect.return_value = mock_conn
+
+        monkeypatch.setattr(
+            "importlib.import_module",
+            lambda name: mock_connector if name == "snowflake.connector" else importlib.__import__(name),
+        )
+
+        verifier = EquivalenceVerifier()
+        config = Config(
+            snowflake_account="test_acct",
+            snowflake_user="test_user",
+            snowflake_password="test_password",
+            snowflake_database="test_db",
+            snowflake_warehouse="test_wh",
+        )
+
+        verifier.verify_with_snowflake(
+            "SELECT 1",
+            "SELECT 1",
+            config=config,
+            timeout=60,
+        )
+
+        mock_connector.connect.assert_called_once()
+        _, kwargs = mock_connector.connect.call_args
+        assert kwargs.get("session_parameters") == {"STATEMENT_TIMEOUT_IN_SECONDS": 60}
+        mock_conn.close.assert_called_once()
+
+    def test_verify_with_snowflake_with_differences(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test verification when Snowflake returns differences between queries."""
+        mock_connector = MagicMock()
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [
+            ("orig_not_in_opt", 5),
+            ("opt_not_in_orig", 0),
+        ]
+        mock_conn.cursor.return_value = mock_cursor
+        mock_connector.connect.return_value = mock_conn
+
+        monkeypatch.setattr(
+            "importlib.import_module",
+            lambda name: mock_connector if name == "snowflake.connector" else importlib.__import__(name),
+        )
+
+        verifier = EquivalenceVerifier()
+        config = Config(
+            snowflake_account="test_acct",
+            snowflake_user="test_user",
+            snowflake_password="test_password",
+            snowflake_database="test_db",
+            snowflake_warehouse="test_wh",
+        )
+
+        result = verifier.verify_with_snowflake(
+            "SELECT 1",
+            "SELECT 1",
+            config=config,
+        )
+
+        assert result.is_equivalent is False
+        assert result.orig_not_in_opt_count == 5
+        assert result.opt_not_in_orig_count == 0
+        assert result.error_message is None
+        mock_conn.close.assert_called_once()

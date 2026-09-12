@@ -10,6 +10,7 @@ from icepick.llm.client import LLMClient
 from icepick.llm.slicer import ContextSlicer, SliceContext
 from icepick.parser import parse_snowflake_sql
 from icepick.patcher.agentic import AgenticPatcher
+from icepick.verifier.equivalence import EquivalenceVerifier, VerificationResult
 
 
 def test_agentic_patcher_init_defaults() -> None:
@@ -279,3 +280,113 @@ def test_slicing_integration_with_real_slicer_and_mock_generate_text() -> None:
     updated_sql = updated_ast.sql(dialect="snowflake")
     assert "p.has_refund = TRUE" in updated_sql
     assert "EXISTS" not in updated_sql
+
+
+def test_agentic_patcher_verify_loop_success_after_retry() -> None:
+    """Test verify loop self-correction succeeds on second attempt after feedback."""
+    sql = (
+        "SELECT p.id, p.name FROM parent p "
+        "WHERE EXISTS (SELECT 1 FROM child c WHERE c.parent_id = p.id)"
+    )
+    ast = parse_snowflake_sql(sql)
+    rule = CorrelatedSubqueryRule()
+    issues = rule.check(ast)
+    assert len(issues) == 1
+    issue = issues[0]
+
+    # Attempt 1 returns imperfect rewrite; Attempt 2 returns valid rewrite
+    repl1 = sqlglot.parse_one("p.has_child = 1", read="snowflake")
+    repl2 = sqlglot.parse_one("p.has_child = TRUE", read="snowflake")
+
+    mock_llm_client = MagicMock(spec=LLMClient)
+    mock_llm_client.rewrite_fragment.side_effect = [repl1, repl2]
+
+    # Mock verifier: first attempt fails (difference), second attempt passes (equivalent)
+    mock_verifier = MagicMock(spec=EquivalenceVerifier)
+    mock_verifier.verify_with_snowflake.side_effect = [
+        VerificationResult(
+            is_equivalent=False,
+            orig_not_in_opt_count=2,
+            opt_not_in_orig_count=1,
+            verification_sql="EXCEPT SQL 1",
+        ),
+        VerificationResult(
+            is_equivalent=True,
+            orig_not_in_opt_count=0,
+            opt_not_in_orig_count=0,
+            verification_sql="EXCEPT SQL 2",
+        ),
+    ]
+
+    patcher = AgenticPatcher(llm_client=mock_llm_client)
+    updated_ast, success = patcher.apply_issue(
+        ast,
+        issue,
+        verifier=mock_verifier,
+        max_retries=3,
+    )
+
+    assert success is True
+    assert mock_llm_client.rewrite_fragment.call_count == 2
+    assert mock_verifier.verify_with_snowflake.call_count == 2
+
+    # Second LLM call must include feedback from the first failed attempt
+    second_slice = mock_llm_client.rewrite_fragment.call_args_list[1][0][0]
+    expected_feedback = (
+        "Previous rewrite produced differing results: 2 missing rows, 1 extra rows. "
+        "Please ensure exact semantic equivalence."
+    )
+    assert expected_feedback in second_slice.prompt
+
+    # Verify replacement 2 was accepted
+    updated_sql = updated_ast.sql(dialect="snowflake")
+    assert "p.has_child = TRUE" in updated_sql
+    assert "EXISTS" not in updated_sql
+
+
+def test_agentic_patcher_verify_loop_exhausted_retries_falls_back() -> None:
+    """Test verify loop safely falls back to original AST when all retries fail."""
+    sql = (
+        "SELECT p.id, p.name FROM parent p "
+        "WHERE EXISTS (SELECT 1 FROM child c WHERE c.parent_id = p.id)"
+    )
+    ast = parse_snowflake_sql(sql)
+    orig_sql = ast.sql(dialect="snowflake")
+    rule = CorrelatedSubqueryRule()
+    issues = rule.check(ast)
+    issue = issues[0]
+
+    mock_llm_client = MagicMock(spec=LLMClient)
+    # Always return candidate expressions
+    mock_llm_client.rewrite_fragment.side_effect = [
+        sqlglot.parse_one("p.bad_col_1 = TRUE", read="snowflake"),
+        sqlglot.parse_one("p.bad_col_2 = TRUE", read="snowflake"),
+        sqlglot.parse_one("p.bad_col_3 = TRUE", read="snowflake"),
+    ]
+
+    # Mock verifier: all attempts fail verification
+    mock_verifier = MagicMock(spec=EquivalenceVerifier)
+    mock_verifier.verify_with_snowflake.return_value = VerificationResult(
+        is_equivalent=False,
+        orig_not_in_opt_count=5,
+        opt_not_in_orig_count=3,
+        verification_sql="EXCEPT SQL",
+    )
+
+    patcher = AgenticPatcher(llm_client=mock_llm_client)
+    # max_retries=2 -> 1 initial attempt + 2 retries = 3 total attempts
+    updated_ast, success = patcher.apply_issue(
+        ast,
+        issue,
+        verifier=mock_verifier,
+        max_retries=2,
+    )
+
+    assert success is False
+    assert mock_llm_client.rewrite_fragment.call_count == 3
+    assert mock_verifier.verify_with_snowflake.call_count == 3
+
+    # Fail-Safe: Original AST must be preserved intact
+    assert updated_ast.sql(dialect="snowflake") == orig_sql
+    assert "EXISTS" in updated_ast.sql(dialect="snowflake")
+

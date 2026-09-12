@@ -206,27 +206,29 @@ icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run
 ---
 
 ### 4. セマンティクス等価性の検証 (`verify`)
-元クエリと最適化クエリが同一の結果セットを返すことを証明する双方向 `EXCEPT` クエリを生成・確認します。
+元クエリと最適化クエリが同一の結果セットを返すことを、Snowflake 上で双方向 `EXCEPT` クエリを実行して決定論的・数学的に証明します。
 
+#### Snowflake 実環境で等価性を検証する
 ```bash
-# 検証用 SQL をターミナルに表示（Snowflake Web UI や SnowSQL で即実行可能）
+icepick verify models/batch_mart.sql models/batch_mart_optimized.sql
+```
+```text
+✓ Equivalence Verified! Queries are mathematically equivalent (0 differences in both directions).
+```
+
+#### 検証用 SQL のみ確認する (`--dry-run`)
+Snowflake に接続せず、生成された双方向 EXCEPT クエリをターミナルに表示します。
+```bash
 icepick verify models/batch_mart.sql models/batch_mart_optimized.sql --dry-run
 ```
 
-```sql
-WITH orig AS (
-  /* 元のクエリ */
-  ...
-),
-opt AS (
-  /* 最適化後のクエリ */
-  ...
-)
-SELECT 'orig_not_in_opt' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM orig EXCEPT SELECT * FROM opt)
-UNION ALL
-SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM opt EXCEPT SELECT * FROM orig);
+#### 検証ループによる自己修復リライト (`rewrite --verify-loop`)
+LLM によるリライト結果を Snowflake 双方向 EXCEPT で即座に自動検証し、差分が発生した場合はエラーフィードバックをプロンプトに注入して最大 3 回自己修復ループを回します。
+```bash
+icepick rewrite models/batch_mart.sql --agentic --verify-loop
 ```
-*(※ 双方向の `cnt` がともに `0` であれば、結果セットの一致が数学的に保証されます)*
+*(※ 双方向の差分がともに `0` となる完全等価性が証明された Diff のみが出力されるため、安心してパッチ適用できます)*
+
 
 ---
 

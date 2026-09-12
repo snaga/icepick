@@ -78,6 +78,9 @@ class TestAgentContextUnit:
         # Check options for 'verify'
         verify_opts = commands["verify"]["options"]
         assert "--dry-run" in verify_opts
+        assert "--timeout" in verify_opts
+        assert "--config" in verify_opts
+        assert "--json" in verify_opts
 
         # Check --dialect choices
         expected_dialects = ["snowflake", "postgres", "duckdb", "bigquery"]

@@ -29,6 +29,13 @@ class Config:
         gemini_api_key: API key for Google AI Studio Gemini API (or loaded via GEMINI_API_KEY env).
         gcp_project: GCP project ID when using Vertex AI.
         gcp_location: GCP location/region when using Vertex AI.
+        snowflake_account: Snowflake account identifier.
+        snowflake_user: Snowflake username.
+        snowflake_password: Optional Snowflake password.
+        snowflake_database: Default Snowflake database.
+        snowflake_schema: Default Snowflake schema.
+        snowflake_warehouse: Default Snowflake virtual warehouse.
+        snowflake_role: Optional Snowflake role.
     """
 
     dialect: str = "snowflake"
@@ -44,6 +51,13 @@ class Config:
     gemini_api_key: str | None = None
     gcp_project: str | None = None
     gcp_location: str | None = None
+    snowflake_account: str | None = None
+    snowflake_user: str | None = None
+    snowflake_password: str | None = None
+    snowflake_database: str | None = None
+    snowflake_schema: str | None = None
+    snowflake_warehouse: str | None = None
+    snowflake_role: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize rule lists and perform basic validation."""
@@ -116,6 +130,13 @@ class Config:
             - GEMINI_API_KEY: Google AI Studio API key
             - GCP_PROJECT / GOOGLE_CLOUD_PROJECT: GCP Project ID
             - GCP_LOCATION / GOOGLE_CLOUD_REGION: GCP Region / Location
+            - SNOWFLAKE_ACCOUNT: Snowflake account identifier
+            - SNOWFLAKE_USER: Snowflake username
+            - SNOWFLAKE_PASSWORD: Optional Snowflake password
+            - SNOWFLAKE_DATABASE: Default Snowflake database
+            - SNOWFLAKE_SCHEMA: Default Snowflake schema
+            - SNOWFLAKE_WAREHOUSE: Default Snowflake virtual warehouse
+            - SNOWFLAKE_ROLE: Optional Snowflake role
 
         Returns:
             Config: Configuration with environment values applied.
@@ -144,6 +165,14 @@ class Config:
         gcp_project = os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
         gcp_location = os.environ.get("GCP_LOCATION") or os.environ.get("GOOGLE_CLOUD_REGION")
 
+        snowflake_account = os.environ.get("SNOWFLAKE_ACCOUNT")
+        snowflake_user = os.environ.get("SNOWFLAKE_USER")
+        snowflake_password = os.environ.get("SNOWFLAKE_PASSWORD")
+        snowflake_database = os.environ.get("SNOWFLAKE_DATABASE")
+        snowflake_schema = os.environ.get("SNOWFLAKE_SCHEMA")
+        snowflake_warehouse = os.environ.get("SNOWFLAKE_WAREHOUSE")
+        snowflake_role = os.environ.get("SNOWFLAKE_ROLE")
+
         return cls(
             dialect=dialect,
             enabled_rules=enabled_rules,
@@ -155,6 +184,13 @@ class Config:
             gemini_api_key=gemini_api_key,
             gcp_project=gcp_project,
             gcp_location=gcp_location,
+            snowflake_account=snowflake_account,
+            snowflake_user=snowflake_user,
+            snowflake_password=snowflake_password,
+            snowflake_database=snowflake_database,
+            snowflake_schema=snowflake_schema,
+            snowflake_warehouse=snowflake_warehouse,
+            snowflake_role=snowflake_role,
         )
 
 

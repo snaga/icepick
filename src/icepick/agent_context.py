@@ -87,6 +87,16 @@ def get_agent_context() -> dict[str, Any]:
                         "default": False,
                         "description": "Enable LLM-assisted targeted rewriting for complex patterns (e.g. correlated subqueries).",
                     },
+                    "--verify-loop": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Enable closed-loop verification with Snowflake bidirectional EXCEPT; retries LLM rewrite on difference.",
+                    },
+                    "--max-retries": {
+                        "type": "int",
+                        "default": 3,
+                        "description": "Maximum retry attempts for verify-loop self-correction.",
+                    },
                     "--flatten-subqueries": {
                         "type": "bool",
                         "default": False,
@@ -170,6 +180,23 @@ def get_agent_context() -> dict[str, Any]:
                         "default": "snowflake",
                         "choices": ["snowflake", "postgres", "duckdb", "bigquery"],
                         "description": "SQL dialect to use.",
+                    },
+                    "--timeout": {
+                        "flag": "-t",
+                        "type": "int",
+                        "default": None,
+                        "description": "Snowflake statement execution timeout in seconds.",
+                    },
+                    "--config": {
+                        "flag": "-c",
+                        "type": "Path",
+                        "default": None,
+                        "description": "Path to configuration file (.json or .toml).",
+                    },
+                    "--json": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Output verification metrics as structured JSON to stdout.",
                     },
                 },
             },

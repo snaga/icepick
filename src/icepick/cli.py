@@ -6,6 +6,7 @@ Provides typer-based command-line commands for linting and optimizing Snowflake 
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -36,7 +37,7 @@ from icepick.parser import parse_snowflake_sql
 from icepick.patcher.agentic import AgenticPatcher
 from icepick.patcher.in_place import ASTPatcher
 from icepick.patcher.subquery_to_cte import SubqueryToCTE
-from icepick.security.credentials import resolve_credential
+from icepick.security.credentials import format_actionable_error, resolve_credential
 from icepick.verifier.equivalence import EquivalenceVerifier
 
 app = typer.Typer(
@@ -259,6 +260,16 @@ def rewrite(
         "--agentic",
         help="Enable LLM-assisted targeted rewriting for complex patterns (e.g. correlated subqueries).",
     ),
+    verify_loop: bool = typer.Option(
+        False,
+        "--verify-loop",
+        help="Enable closed-loop verification with Snowflake bidirectional EXCEPT; retries LLM rewrite on difference.",
+    ),
+    max_retries: int = typer.Option(
+        3,
+        "--max-retries",
+        help="Maximum retry attempts for verify-loop self-correction.",
+    ),
     flatten_subqueries: bool = typer.Option(
         False,
         "--flatten-subqueries",
@@ -282,6 +293,8 @@ def rewrite(
 ) -> None:
     """Optimize Snowflake SQL queries and output Unified Diff (read-only)."""
     dialect = _validate_dialect(dialect)
+    if verify_loop:
+        agentic = True
 
     target_rank: int | None = None
     if category is not None:
@@ -358,8 +371,58 @@ def rewrite(
                 )
                 raise typer.Exit(code=1) from exc
 
+            # Resolve and validate Snowflake credentials if verify_loop is requested
+            verifier: EquivalenceVerifier | None = None
+            if verify_loop:
+                account = getattr(cfg, "snowflake_account", None) or os.environ.get("SNOWFLAKE_ACCOUNT")
+                user = getattr(cfg, "snowflake_user", None) or os.environ.get("SNOWFLAKE_USER")
+                database = getattr(cfg, "snowflake_database", None) or os.environ.get("SNOWFLAKE_DATABASE")
+                warehouse = getattr(cfg, "snowflake_warehouse", None) or os.environ.get("SNOWFLAKE_WAREHOUSE")
+                password = getattr(cfg, "snowflake_password", None)
+                if not password:
+                    try:
+                        password, _ = resolve_credential("snowflake_password")
+                    except Exception:  # noqa: BLE001
+                        password = os.environ.get("SNOWFLAKE_PASSWORD")
+
+                missing: list[str] = []
+                if not account:
+                    missing.append("account")
+                if not user:
+                    missing.append("user")
+                if not password:
+                    missing.append("password")
+                if not database:
+                    missing.append("database")
+                if not warehouse:
+                    missing.append("warehouse")
+
+                if missing:
+                    if "password" in missing:
+                        auth_err = format_actionable_error("snowflake_password")
+                        err_console.print(f"[bold red]Authentication Error:[/bold red] {auth_err}")
+                    else:
+                        err_console.print(
+                            f"[bold red]Configuration Error:[/bold red] Missing required Snowflake parameter(s): {', '.join(missing)}."
+                        )
+                    err_console.print(
+                        "[yellow]Actionable Advice:[/yellow] Set Snowflake credentials in environment variables "
+                        "(SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, SNOWFLAKE_DATABASE, "
+                        "SNOWFLAKE_WAREHOUSE) or via configuration file."
+                    )
+                    raise typer.Exit(code=1)
+
+                verifier = EquivalenceVerifier(dialect=dialect)
+
             agentic_patcher = AgenticPatcher(llm_client=llm_client, dialect=dialect)
-            ast, agentic_applied = agentic_patcher.apply_all(ast, agentic_issues)
+            ast, agentic_applied = agentic_patcher.apply_all(
+                ast,
+                agentic_issues,
+                verifier=verifier,
+                orig_sql=original_sql,
+                config=cfg,
+                max_retries=max_retries,
+            )
             applied_issues.extend(agentic_applied)
 
     if flatten_subqueries:
@@ -582,6 +645,27 @@ def verify(
         "-d",
         help="SQL dialect to use.",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Output verification metrics as structured JSON to stdout.",
+    ),
+    timeout: int | None = typer.Option(
+        None,
+        "--timeout",
+        "-t",
+        help="Snowflake statement execution timeout in seconds.",
+    ),
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to configuration file (.json or .toml).",
+    ),
 ) -> None:
     """Verify deterministic equivalence between original and optimized queries using EXCEPT."""
     dialect = _validate_dialect(dialect)
@@ -592,25 +676,71 @@ def verify(
         err_console.print(f"[bold red]Error reading files:[/bold red] {exc}")
         raise typer.Exit(code=2) from exc
 
+    cfg = _load_config(config)
+
     verifier = EquivalenceVerifier(dialect=dialect)
     verification_sql = verifier.build_verification_query(orig_sql, opt_sql, dialect=dialect)
 
     if dry_run:
+        if json_output:
+            dry_run_data = {
+                "original_file": str(original_file),
+                "optimized_file": str(optimized_file),
+                "dry_run": True,
+                "verification_sql": verification_sql,
+            }
+            typer.echo(json.dumps(dry_run_data, ensure_ascii=False, indent=2))
+            raise typer.Exit(code=0)
+
         console.print("[bold cyan]Generated Verification SQL (Dry Run):[/bold cyan]")
         syntax = Syntax(verification_sql, "sql", theme="monokai", line_numbers=True, word_wrap=True)
         console.print(syntax)
         raise typer.Exit(code=0)
 
-    # Securely resolve Snowflake credentials
-    try:
-        resolve_credential("snowflake_password")
-    except AuthenticationError as exc:
-        err_console.print(f"[bold red]{exc}[/bold red]")
-        raise typer.Exit(code=1) from exc
+    result = verifier.verify_with_snowflake(orig_sql, opt_sql, config=cfg, timeout=timeout)
+
+    if json_output:
+        output_data = {
+            "original_file": str(original_file),
+            "optimized_file": str(optimized_file),
+            "is_equivalent": result.is_equivalent,
+            "orig_not_in_opt_count": result.orig_not_in_opt_count,
+            "opt_not_in_orig_count": result.opt_not_in_orig_count,
+            "error": result.error_message,
+        }
+        typer.echo(json.dumps(output_data, ensure_ascii=False, indent=2))
+        raise typer.Exit(code=0 if result.is_equivalent else 1)
+
+    if result.error_message:
+        err_console.print(f"[bold red]Error during verification:[/bold red] {result.error_message}")
+        err_console.print(
+            "[yellow]Actionable Advice:[/yellow] Verify Snowflake connection settings via environment "
+            "variables (SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, SNOWFLAKE_DATABASE, "
+            "SNOWFLAKE_WAREHOUSE) or specify a configuration file via '--config <path>'."
+        )
+        raise typer.Exit(code=1)
+
+    if not result.is_equivalent:
+        table = Table(
+            title="Equivalence Verification Differences",
+            show_header=True,
+            header_style="bold magenta",
+        )
+        table.add_column("Difference Type", style="dim")
+        table.add_column("Row Count", justify="right")
+        table.add_row("Original not in Optimized", str(result.orig_not_in_opt_count))
+        table.add_row("Optimized not in Original", str(result.opt_not_in_orig_count))
+        console.print(table)
+        console.print(
+            "[bold red]✗ Equivalence Verification Failed![/bold red] Queries produced differing result sets.",
+            soft_wrap=True,
+        )
+        raise typer.Exit(code=1)
 
     console.print(
-        "[yellow]Direct Snowflake execution with resolved credentials requires an active connection session. "
-        "Use --dry-run to display the verification query.[/yellow]"
+        "[bold green]✓ Equivalence Verified![/bold green] Queries are mathematically equivalent "
+        "(0 differences in both directions).",
+        soft_wrap=True,
     )
     raise typer.Exit(code=0)
 
