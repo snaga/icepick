@@ -54,3 +54,11 @@ Thumbs.db
 .icepick_feedback.jsonl
 *.feedback.jsonl
 
+# Agent & AI Configuration
+.agent/
+.gemini/
+AGENTS.md
+
+
+
+
