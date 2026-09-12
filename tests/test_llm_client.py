@@ -11,6 +11,7 @@ import pytest
 from sqlglot import exp
 
 from icepick.config import Config
+from icepick.exceptions import AuthenticationError
 from icepick.llm.client import LLMClient
 from icepick.llm.slicer import SliceContext
 
@@ -50,7 +51,9 @@ class TestLLMClient:
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured_requests.append(request)
-            data = _make_gemini_response("```sql\nSELECT order_id, amount FROM orders WHERE amount > 0\n```")
+            data = _make_gemini_response(
+                "```sql\nSELECT order_id, amount FROM orders WHERE amount > 0\n```"
+            )
             return httpx.Response(200, json=data)
 
         transport = httpx.MockTransport(handler)
@@ -72,7 +75,10 @@ class TestLLMClient:
 
         req = captured_requests[0]
         assert req.method == "POST"
-        assert req.url == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        assert (
+            req.url
+            == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        )
         assert req.headers["x-goog-api-key"] == "test-api-key"
         assert req.headers["Content-Type"] == "application/json"
 
@@ -86,7 +92,9 @@ class TestLLMClient:
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured_requests.append(request)
-            data = _make_gemini_response("```sql\nSELECT customer_id, count(*) FROM customers GROUP BY customer_id\n```")
+            data = _make_gemini_response(
+                "```sql\nSELECT customer_id, count(*) FROM customers GROUP BY customer_id\n```"
+            )
             return httpx.Response(200, json=data)
 
         transport = httpx.MockTransport(handler)
@@ -132,7 +140,9 @@ class TestLLMClient:
 
         mock_creds.refresh.side_effect = refresh_side_effect
 
-        transport = httpx.MockTransport(lambda r: httpx.Response(200, json=_make_gemini_response("SELECT 1")))
+        transport = httpx.MockTransport(
+            lambda r: httpx.Response(200, json=_make_gemini_response("SELECT 1"))
+        )
         client = httpx.Client(transport=transport)
 
         with patch("google.auth.default", return_value=(mock_creds, "project")):
@@ -162,7 +172,9 @@ class TestLLMClient:
     def test_sql_extraction_formats(self) -> None:
         """Test extracting SQL from various code-fence markdown formats and raw text."""
         # 1. ```sql ... ```
-        sql1 = LLMClient._extract_sql("Here is the answer:\n```sql\nSELECT 1 AS num\n```\nExplanation...")
+        sql1 = LLMClient._extract_sql(
+            "Here is the answer:\n```sql\nSELECT 1 AS num\n```\nExplanation..."
+        )
         assert sql1 == "SELECT 1 AS num"
 
         # 2. ``` ... ``` (without sql tag)
@@ -179,7 +191,9 @@ class TestLLMClient:
     def test_fail_safe_on_syntax_error_returns_none(self) -> None:
         """Test that invalid SQL returned by LLM results in None without raising an exception."""
         transport = httpx.MockTransport(
-            lambda r: httpx.Response(200, json=_make_gemini_response("```sql\nSELECT FROM WHERE !!! INVALID\n```"))
+            lambda r: httpx.Response(
+                200, json=_make_gemini_response("```sql\nSELECT FROM WHERE !!! INVALID\n```")
+            )
         )
         client = httpx.Client(transport=transport)
 
@@ -200,9 +214,7 @@ class TestLLMClient:
 
     def test_fail_safe_on_http_status_error_returns_none(self) -> None:
         """Test that HTTP 500 error from LLM API results in None via rewrite_fragment."""
-        transport = httpx.MockTransport(
-            lambda r: httpx.Response(500, text="Internal Server Error")
-        )
+        transport = httpx.MockTransport(lambda r: httpx.Response(500, text="Internal Server Error"))
         client = httpx.Client(transport=transport)
 
         llm = LLMClient(provider="gemini", api_key="dummy", http_client=client)
@@ -211,6 +223,7 @@ class TestLLMClient:
 
     def test_fail_safe_on_http_timeout_returns_none(self) -> None:
         """Test that request timeout results in None via rewrite_fragment."""
+
         def timeout_handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ReadTimeout("Request timed out", request=request)
 
@@ -223,9 +236,7 @@ class TestLLMClient:
 
     def test_generate_text_raises_on_empty_candidates(self) -> None:
         """Test that an empty candidates array in response raises ValueError."""
-        transport = httpx.MockTransport(
-            lambda r: httpx.Response(200, json={"candidates": []})
-        )
+        transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"candidates": []}))
         client = httpx.Client(transport=transport)
 
         llm = LLMClient(provider="gemini", api_key="dummy", http_client=client)
@@ -243,21 +254,71 @@ class TestLLMClient:
         with pytest.raises(ValueError, match="candidate content contains no parts"):
             llm.generate_text("test")
 
-    def test_missing_credentials_raise_value_error(self) -> None:
-        """Test ValueError when credentials are not configured."""
-        # Gemini without API key
-        llm_gemini = LLMClient(provider="gemini", api_key=None)
-        with patch.dict("os.environ", {}, clear=True):
-            llm_gemini.api_key = None
-            with pytest.raises(ValueError, match="Gemini API key is required"):
+    def test_missing_credentials_raise_actionable_or_value_error(self) -> None:
+        """Test AuthenticationError for Gemini and ValueError for Vertex when credentials are not configured."""
+        # Gemini without API key: raises actionable AuthenticationError
+        with (
+            patch("icepick.security.credentials.read_wcm_credential_fn", return_value=None),
+            patch.dict("os.environ", {}, clear=True),
+        ):
+            llm_gemini = LLMClient(provider="gemini", api_key=None)
+            assert llm_gemini.api_key is None
+            with pytest.raises(AuthenticationError, match=r"\[Authentication Error\]") as exc_info:
                 llm_gemini.generate_text("test")
+            assert "gemini_api_key" in str(exc_info.value)
+            assert "cmdkey" in str(exc_info.value)
 
-        # Vertex without project ID
+        # Vertex without project ID: raises ValueError
         llm_vertex = LLMClient(provider="vertex", project=None)
         with patch.dict("os.environ", {}, clear=True):
             llm_vertex.project = None
             with pytest.raises(ValueError, match="Google Cloud project ID is required"):
                 llm_vertex.generate_text("test")
+
+    def test_gemini_resolves_credential_from_debug_env_var(self) -> None:
+        """Test resolving Gemini API key from DEBUG_ICEPICK_GEMINI_API_KEY environment variable."""
+        with patch.dict("os.environ", {"DEBUG_ICEPICK_GEMINI_API_KEY": "debug-secret-key-123"}):
+            llm = LLMClient(provider="gemini", api_key=None)
+            assert llm.api_key == "debug-secret-key-123"
+
+    def test_gemini_resolves_credential_from_wcm(self) -> None:
+        """Test resolving Gemini API key from Windows Credential Manager when env var is absent."""
+
+        def mock_wcm(target: str) -> str | None:
+            if target == "icepick:gemini_api_key":
+                return "wcm-vault-key-456"
+            return None
+
+        with (
+            patch("icepick.security.credentials.read_wcm_credential_fn", side_effect=mock_wcm),
+            patch.dict("os.environ", {}, clear=True),
+        ):
+            llm = LLMClient(provider="gemini", api_key=None)
+            assert llm.api_key == "wcm-vault-key-456"
+
+    def test_gemini_generic_env_var_ignored(self) -> None:
+        """Test that generic ambient GEMINI_API_KEY is strictly ignored to prevent secret leakage."""
+        with (
+            patch("icepick.security.credentials.read_wcm_credential_fn", return_value=None),
+            patch.dict("os.environ", {"GEMINI_API_KEY": "leaked-ambient-key"}, clear=True),
+        ):
+            llm = LLMClient(provider="gemini", api_key=None)
+            assert llm.api_key is None
+            with pytest.raises(AuthenticationError):
+                llm.generate_text("test")
+
+    def test_gemini_explicit_api_key_takes_highest_priority(self) -> None:
+        """Test that explicit api_key argument overrides both DEBUG env var and WCM."""
+        with patch.dict("os.environ", {"DEBUG_ICEPICK_GEMINI_API_KEY": "debug-env-key"}):
+            llm = LLMClient(provider="gemini", api_key="explicit-param-key")
+            assert llm.api_key == "explicit-param-key"
+
+    def test_gemini_config_api_key_takes_priority(self) -> None:
+        """Test that Config(gemini_api_key=...) overrides DEBUG env var and WCM."""
+        config = Config(gemini_api_key="cfg-explicit-key")
+        with patch.dict("os.environ", {"DEBUG_ICEPICK_GEMINI_API_KEY": "debug-env-key"}):
+            llm = LLMClient(config=config)
+            assert llm.api_key == "cfg-explicit-key"
 
     def test_provider_normalization_and_validation(self) -> None:
         """Test provider aliases and rejection of invalid providers."""
@@ -371,4 +432,3 @@ class TestLLMClient:
         with patch("sqlglot.parse_one", return_value="not_an_ast_expression"):
             result = llm.rewrite_fragment(_dummy_slice_context())
             assert result is None
-

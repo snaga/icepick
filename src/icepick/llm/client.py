@@ -18,6 +18,8 @@ from google.auth import transport as auth_transport
 from sqlglot import exp
 
 from icepick.config import Config
+from icepick.exceptions import AuthenticationError
+from icepick.security.credentials import resolve_credential
 
 if TYPE_CHECKING:
     from icepick.llm.slicer import SliceContext
@@ -117,7 +119,17 @@ class LLMClient:
         raw_provider = provider or cfg.llm_provider
         self.provider = self._normalize_provider(raw_provider)
         self.model = model or cfg.llm_model
-        self.api_key = api_key or cfg.gemini_api_key or os.getenv("GEMINI_API_KEY")
+
+        self._auth_error: AuthenticationError | None = None
+        resolved_api_key = api_key or cfg.gemini_api_key
+        if not resolved_api_key:
+            try:
+                resolved_api_key, _ = resolve_credential("gemini_api_key")
+            except AuthenticationError as exc:
+                self._auth_error = exc
+                resolved_api_key = None
+
+        self.api_key = resolved_api_key
         self.project = (
             project
             or cfg.gcp_project
@@ -169,11 +181,11 @@ class LLMClient:
 
         if self.provider == "gemini":
             if not self.api_key:
-                msg = (
-                    "Gemini API key is required. Provide api_key argument, "
-                    "set gemini_api_key in Config, or set GEMINI_API_KEY env var."
-                )
-                raise ValueError(msg)
+                if self._auth_error is not None:
+                    raise self._auth_error
+                # If api_key was cleared dynamically, attempt resolution or raise AuthenticationError
+                resolved_key, _ = resolve_credential("gemini_api_key")
+                self.api_key = resolved_key
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
             headers = {
                 "x-goog-api-key": self.api_key,
@@ -209,6 +221,7 @@ class LLMClient:
             str: Generated text response from the model.
 
         Raises:
+            AuthenticationError: If Gemini API key cannot be resolved from secure credential sources.
             ValueError: If required credentials/project are missing or response format is unexpected.
             httpx.HTTPError: If the HTTP request fails.
         """
