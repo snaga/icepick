@@ -198,18 +198,127 @@ SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM opt E
 
 ---
 
+### 4. エージェント親和性とフィードバックループ (`Agent-Native DX`)
+
+Icepick は、人間だけでなく AI コーディングエージェント（Claude Code, Cursor, Antigravity 等）が自律的かつ安全に利用できるよう設計されています。
+
+#### Layer 2 イントロスペクション (`agent-context`)
+全コマンド体系・引数仕様・最適化ルール一覧（`SNOW-001`〜`007`）・環境変数スキーマを **1 回のコマンド実行で構造化 JSON として把握** できます（`--help` の連打によるトークン浪費を防止）。
+```bash
+icepick agent-context
+```
+
+#### 開発摩擦・バグのローカル記録 (`feedback`)
+テスト中や運用中に遭遇した摩擦（フリクション）やバグ、改善アイデアを `.icepick_feedback.jsonl` に安全に追記記録します。
+```bash
+# 基本的な記録
+icepick feedback "JOIN句のサブクエリ平坦化でエイリアスが重複した" --category bug
+
+# 機械可読 JSON 出力
+icepick feedback "CTE抽出の順序が直感的でわかりやすい" --category idea --json
+```
+
+#### 破壊的操作の明示的境界 (`--dry-run` & `--force`)
+* `--dry-run`: 実ファイルやパッチファイルへの書き込みを安全にスキップし、差分プレビューのみを出力。
+* `--force` / `-f`: パイプラインや非対話環境（stdin 非 TTY）で `--write`（上書き）を実行する際は、誤爆防止のため `--force` が必須。
+
+#### 構造化出力 (`--json`)
+すべての主要コマンドで `--json` をサポート。装飾なしの純粋な JSON が `stdout` に出力され、ログやエラーは `stderr` に分離されます。
+```bash
+icepick check models/batch_mart.sql --json
+icepick fix models/batch_mart.sql --dry-run --json
+```
+
+---
+
+## 🔐 セキュアな認証設定 (Authentication)
+
+API キーやパスワードなどの機密情報を安全に保護し、シェル履歴（`ConsoleHost_history.txt`）への平文残存や GitHub への誤コミットを防ぐため、Icepick は **Windows 資格情報マネージャー (Windows Credential Manager: WCM)** を標準の認証ストレージとして採用しています。
+
+> [!IMPORTANT]
+> **環境汚染防止のための設計方針**:
+> 他のツールや親プロセスからの偶発的なトークン混入・情報漏洩を防ぐため、**一般的な環境変数（`GEMINI_API_KEY` や `SNOWFLAKE_PASSWORD` 等）は意図的に探索対象から除外** されています。
+
+### 認証解決の優先順位 (Priority Pyramid)
+1. **一時デバッグ / CI・CD 専用環境変数** (`DEBUG_ICEPICK_<KEY>`)
+2. **Windows 資格情報マネージャー** (`icepick:<key>`)
+3. **自己修正エラー (Actionable Error)**
+
+---
+
+### 推奨設定手順 (PowerShell マスク入力)
+シェル履歴に秘密情報を一切残さないため、PowerShell の対話型マスク入力を推奨します。
+
+#### 1. Gemini API キーの登録 (LLM 局所リライト用)
+```powershell
+$cred = Get-Credential -UserName "any" -Message "Gemini API Key をパスワード欄に入力してください"
+cmdkey /generic:icepick:gemini_api_key /user:any /pass:$($cred.GetNetworkCredential().Password)
+```
+
+#### 2. Snowflake パスワードの登録 (verify コマンド用)
+```powershell
+$cred = Get-Credential -UserName "any" -Message "Snowflake パスワードを入力してください"
+cmdkey /generic:icepick:snowflake_password /user:any /pass:$($cred.GetNetworkCredential().Password)
+```
+
+---
+
+### 直接登録する場合 (コマンドプロンプト / PowerShell)
+```cmd
+# Gemini API キー
+cmdkey /generic:icepick:gemini_api_key /user:any /pass:<your_gemini_api_key>
+
+# Snowflake パスワード
+cmdkey /generic:icepick:snowflake_password /user:any /pass:<your_snowflake_password>
+```
+*(※ `cmdkey` 特有の UTF-16LE / Null byte トラップは Icepick 内部で自動検知・安全にデコードされます)*
+
+---
+
+### 登録内容の確認・削除
+```cmd
+# 一覧確認
+cmdkey /list:icepick:*
+
+# 削除
+cmdkey /delete:icepick:gemini_api_key
+cmdkey /delete:icepick:snowflake_password
+```
+
+---
+
+### CI / CD または一時デバッグでの利用
+CI 環境やローカルでの一時実行に限り、`DEBUG_ICEPICK_` プレフィックス付き環境変数でオーバーライド可能です。
+
+```powershell
+# PowerShell
+$env:DEBUG_ICEPICK_GEMINI_API_KEY = "your_key"
+$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD = "your_password"
+```
+
+```bash
+# Bash / CI
+export DEBUG_ICEPICK_GEMINI_API_KEY="your_key"
+export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="your_password"
+```
+
+---
+
 ## ⚙️ 設定 (Configuration)
 
 環境変数または設定ファイル（JSON / TOML）により、デフォルト動作をカスタマイズできます。
 
-### 環境変数
-| 環境変数名 | 説明 | デフォルト値 |
+### 設定項目・環境変数一覧
+| 設定項目 / 環境変数 | 説明 | 格納先 / デフォルト値 |
 | :--- | :--- | :--- |
-| `ICEPICK_DIALECT` | 対象 SQL 方言 | `snowflake` |
+| `icepick:gemini_api_key` | Google AI Studio の API キー | **Windows 資格情報マネージャー** (推奨) |
+| `icepick:snowflake_password` | Snowflake 接続パスワード (verify用) | **Windows 資格情報マネージャー** (推奨) |
+| `DEBUG_ICEPICK_GEMINI_API_KEY` | (デバッグ/CI用) Gemini API キー | 環境変数 (未設定) |
+| `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD` | (デバッグ/CI用) Snowflake パスワード | 環境変数 (未設定) |
+| `ICEPICK_DIALECT` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) | `snowflake` |
 | `ICEPICK_ENABLED_RULES` | 有効化するルールID（カンマ区切り） | すべて有効 |
 | `ICEPICK_DISABLED_RULES` | 無効化するルールID（カンマ区切り） | なし |
 | `ICEPICK_LLM_PROVIDER` | LLM プロバイダ (`gemini` または `vertex`) | `gemini` |
-| `GEMINI_API_KEY` | Google AI Studio の API キー | なし |
 | `GCP_PROJECT` | Google Cloud プロジェクト ID (Vertex AI 用) | なし |
 | `GCP_LOCATION` | Google Cloud リージョン (Vertex AI 用) | `us-central1` |
 
