@@ -8,10 +8,12 @@ from icepick.diff.formatter import (
     render_diff,
     split_hunks,
 )
+from icepick.diff.patcher import apply_unified_diff
 
 __all__ = [
     "DiffFormatter",
     "DiffHunk",
+    "apply_unified_diff",
     "format_diff",
     "normalize_sql",
     "render_diff",

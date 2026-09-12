@@ -1,9 +1,11 @@
 """Unit tests for diff formatter and renderer module."""
 
+import pytest
 from rich.syntax import Syntax
 
 from icepick.diff import (
     DiffFormatter,
+    apply_unified_diff,
     format_diff,
     normalize_sql,
     render_diff,
@@ -15,8 +17,7 @@ def test_format_diff_with_semantic_change() -> None:
     """Test generating unified diff when there is a meaningful SQL modification."""
     original_sql = "SELECT id, name FROM users WHERE DATE(created_at) = '2023-01-01'"
     modified_sql = (
-        "SELECT id, name FROM users "
-        "WHERE created_at >= '2023-01-01' AND created_at < '2023-01-02'"
+        "SELECT id, name FROM users WHERE created_at >= '2023-01-01' AND created_at < '2023-01-02'"
     )
 
     diff = format_diff(original_sql, modified_sql, filename="models/users.sql")
@@ -132,3 +133,151 @@ def test_normalize_sql() -> None:
     norm = normalize_sql(raw)
     assert "SELECT" in norm
     assert "FROM users" in norm
+
+
+def test_apply_unified_diff_single_hunk() -> None:
+    """Test applying a single hunk patch correctly modifies target text."""
+    original = "SELECT id, name\nFROM users\nWHERE id = 1\n"
+    diff = """--- a/query.sql
++++ b/query.sql
+@@ -3,1 +3,1 @@
+-WHERE id = 1
++WHERE id = 2
+"""
+    patched, applied, total = apply_unified_diff(original, diff)
+    assert total == 1
+    assert applied == 1
+    assert patched == "SELECT id, name\nFROM users\nWHERE id = 2\n"
+
+
+def test_apply_unified_diff_multiple_hunks() -> None:
+    """Test applying all hunks in a multi-hunk patch."""
+    original = "SELECT a\nFROM tbl\nWHERE x = 1\nGROUP BY a\nORDER BY a\n"
+    diff = """--- a/query.sql
++++ b/query.sql
+@@ -1,1 +1,1 @@
+-SELECT a
++SELECT a, b
+@@ -5,1 +5,1 @@
+-ORDER BY a
++ORDER BY b
+"""
+    patched, applied, total = apply_unified_diff(original, diff)
+    assert total == 2
+    assert applied == 2
+    assert "SELECT a, b" in patched
+    assert "ORDER BY b" in patched
+    assert "WHERE x = 1" in patched
+
+
+def test_apply_unified_diff_selected_hunks() -> None:
+    """Test applying only selected hunks while skipping unselected hunks."""
+    original = "SELECT a\nFROM tbl\nWHERE x = 1\nORDER BY a\n"
+    diff = """--- a/query.sql
++++ b/query.sql
+@@ -1,1 +1,1 @@
+-SELECT a
++SELECT a, b
+@@ -4,1 +4,1 @@
+-ORDER BY a
++ORDER BY id
+"""
+    # Apply only Hunk 0
+    patched_0, applied_0, total_0 = apply_unified_diff(original, diff, selected_hunks=[0])
+    assert total_0 == 2
+    assert applied_0 == 1
+    assert "SELECT a, b" in patched_0
+    assert "ORDER BY a" in patched_0  # unchanged
+
+    # Apply only Hunk 1
+    patched_1, applied_1, total_1 = apply_unified_diff(original, diff, selected_hunks=[1])
+    assert total_1 == 2
+    assert applied_1 == 1
+    assert "SELECT a\n" in patched_1  # unchanged
+    assert "ORDER BY id" in patched_1
+
+    # Skip all hunks
+    patched_none, applied_none, total_none = apply_unified_diff(original, diff, selected_hunks=[])
+    assert total_none == 2
+    assert applied_none == 0
+    assert patched_none == original
+
+
+def test_apply_unified_diff_crlf_preservation() -> None:
+    """Test that CRLF line endings are preserved when applying LF unified diff."""
+    original = "SELECT id\r\nFROM users\r\nWHERE id = 1\r\n"
+    diff = """--- a/query.sql
++++ b/query.sql
+@@ -3,1 +3,1 @@
+-WHERE id = 1
++WHERE id = 2
+"""
+    patched, applied, total = apply_unified_diff(original, diff)
+    assert total == 1
+    assert applied == 1
+    assert "\r\n" in patched
+    assert patched == "SELECT id\r\nFROM users\r\nWHERE id = 2\r\n"
+
+
+def test_apply_unified_diff_empty_or_no_hunks() -> None:
+    """Test that empty diff or diff without hunks returns original text and 0 counts."""
+    original = "SELECT 1;\n"
+    patched, applied, total = apply_unified_diff(original, "")
+    assert patched == original
+    assert applied == 0
+    assert total == 0
+
+    patched_header_only, applied_ho, total_ho = apply_unified_diff(
+        original, "--- a/q.sql\n+++ b/q.sql\n"
+    )
+    assert patched_header_only == original
+    assert applied_ho == 0
+    assert total_ho == 0
+
+
+def test_apply_unified_diff_with_no_newline_marker() -> None:
+    """Test applying a diff containing '\\ No newline at end of file' marker safely."""
+    original = "SELECT 1\nFROM tbl\n"
+    diff = """--- a/query.sql
++++ b/query.sql
+@@ -1,2 +1,2 @@
+-SELECT 1
++SELECT 2
+\\ No newline at end of file
+ FROM tbl
+"""
+    patched, applied, total = apply_unified_diff(original, diff)
+    assert total == 1
+    assert applied == 1
+    assert patched == "SELECT 2\nFROM tbl\n"
+
+
+def test_apply_unified_diff_mismatch_raises_value_error() -> None:
+    """Test that applying a diff with mismatched original lines raises ValueError."""
+    original = "SELECT id, name FROM users\n"
+    diff = """--- a/query.sql
++++ b/query.sql
+@@ -1,1 +1,1 @@
+-SELECT non_existent_column FROM orders
++SELECT id FROM users
+"""
+    with pytest.raises(ValueError, match="Hunk target lines could not be matched"):
+        apply_unified_diff(original, diff)
+
+
+def test_apply_unified_diff_start_idx_prevents_rewind() -> None:
+    """Test that second hunk searches forward from current_orig_idx and does not rewind to match previous identical lines."""
+    original = "SELECT 1\nSELECT 2\nSELECT 1\n"
+    diff = """--- a/query.sql
++++ b/query.sql
+@@ -1,1 +1,1 @@
+-SELECT 1
++SELECT A
+@@ -3,1 +3,1 @@
+-SELECT 1
++SELECT B
+"""
+    patched, applied, total = apply_unified_diff(original, diff)
+    assert total == 2
+    assert applied == 2
+    assert patched == "SELECT A\nSELECT 2\nSELECT B\n"

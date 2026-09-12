@@ -132,15 +132,16 @@ icepick check models/batch_mart.sql
 
 ---
 
-### 2. クエリの最適化 ＆ 差分プレビュー (`fix`)
+### 2. クエリの最適化（Unified Diff 出力）(`rewrite`)
+元ファイルを一切改変せず、AST に基づく最適化の差分（Unified Diff）を標準出力またはファイルに出力します。
 
-#### 差分のみをターミナルで確認する (`--diff`)
+#### ターミナルで差分を確認する (Read-Only)
 ```bash
-icepick fix models/batch_mart.sql --diff
+icepick rewrite models/batch_mart.sql
 ```
 ```diff
---- a/models/batch_mart.sql
-+++ b/models/batch_mart.sql
+--- a/batch_mart.sql
++++ b/batch_mart.sql
 @@ -16,7 +16,8 @@
      MAX(event_timestamp) AS last_active
    FROM raw_events
@@ -152,30 +153,53 @@ icepick fix models/batch_mart.sql --diff
      user_id
 ```
 
-#### 対話形式で変更を 1 つずつ確認・適用する (`--interactive`)
-`git add -p` と同様のメンタルモデルで、差分ごとに適用（`[y]/[n]/[q]`）を選択できます。
+#### パッチファイルとして保存する (`--output` / `-o`)
 ```bash
-icepick fix models/batch_mart.sql --interactive
+icepick rewrite models/batch_mart.sql -o patches/batch_mart.patch
 ```
 
 #### インラインサブクエリを CTE に平坦化する (`--flatten-subqueries`)
 ```bash
-icepick fix models/batch_mart.sql --flatten-subqueries --write
+icepick rewrite models/batch_mart.sql --flatten-subqueries
 ```
 
-#### 元ファイルを安全に直接上書きする (`--write` / `-w`)
+#### 重要度でフィルタリングする (`--category`)
 ```bash
-icepick fix models/batch_mart.sql --write
-```
-
-#### パッチファイルを出力する (`--patch` / `-p`)
-```bash
-icepick fix models/batch_mart.sql --patch patches/batch_mart.patch
+# HIGH 以上の重要度（CRITICAL, HIGH）のみを適用した Diff を生成
+icepick rewrite models/batch_mart.sql --category HIGH
 ```
 
 ---
 
-### 3. セマンティクス等価性の検証 (`verify`)
+### 3. パッチの適用 (`patch`)
+Unified Diff を指定の SQL ファイルに外科手術的に適用します。
+
+#### パッチファイルから適用する
+```bash
+icepick patch models/batch_mart.sql patches/batch_mart.patch
+```
+
+#### 対話形式で変更を 1 つずつ確認・適用する (`--interactive` / `-i`)
+`git add -p` と同様のメンタルモデルで、差分（Hunk）ごとに適用（`[y]/[n]/[q]`）を選択できます。
+```bash
+icepick patch models/batch_mart.sql patches/batch_mart.patch --interactive
+```
+
+#### パイプによるワンライナー即時適用
+`rewrite` の出力をパイプで `patch` に流し込み、`--force` で直接適用できます。
+```bash
+icepick rewrite models/batch_mart.sql | icepick patch models/batch_mart.sql --force
+```
+
+#### 適用シミュレーション (`--dry-run`)
+実ファイルを変更せずに適用結果をシミュレーションします。
+```bash
+icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run
+```
+
+---
+
+### 4. セマンティクス等価性の検証 (`verify`)
 元クエリと最適化クエリが同一の結果セットを返すことを証明する双方向 `EXCEPT` クエリを生成・確認します。
 
 ```bash
@@ -200,7 +224,7 @@ SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM opt E
 
 ---
 
-### 4. エージェント親和性とフィードバックループ (`Agent-Native DX`)
+### 5. エージェント親和性とフィードバックループ (`Agent-Native DX`)
 
 Icepick は、人間だけでなく AI コーディングエージェント（Claude Code, Cursor, Antigravity 等）が自律的かつ安全に利用できるよう設計されています。
 
@@ -221,14 +245,15 @@ icepick feedback "CTE抽出の順序が直感的でわかりやすい" --categor
 ```
 
 #### 破壊的操作の明示的境界 (`--dry-run` & `--force`)
-* `--dry-run`: 実ファイルやパッチファイルへの書き込みを安全にスキップし、差分プレビューのみを出力。
-* `--force` / `-f`: パイプラインや非対話環境（stdin 非 TTY）で `--write`（上書き）を実行する際は、誤爆防止のため `--force` が必須。
+* `--dry-run`: 実ファイルへの書き込みを安全にスキップし、差分プレビューのみを出力。
+* `--force` / `-f`: パイプラインや非対話環境（stdin 非 TTY）で `patch` を実行する際は、誤爆防止のため `--force` が必須。
 
 #### 構造化出力 (`--json`)
 すべての主要コマンドで `--json` をサポート。装飾なしの純粋な JSON が `stdout` に出力され、ログやエラーは `stderr` に分離されます。
 ```bash
 icepick check models/batch_mart.sql --json
-icepick fix models/batch_mart.sql --dry-run --json
+icepick rewrite models/batch_mart.sql --json
+icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run --json
 ```
 
 ---
@@ -341,7 +366,7 @@ export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="your_password"
 | `dialect` | `string` | `"snowflake"` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) |
 | `enabled_rules` | `array[string]` | `[]` | 実行するルールIDのホワイトリスト。空の場合は無効化されていない全ルールを実行。 |
 | `disabled_rules` | `array[string]` | `[]` | スキップするルールIDのブラックリスト（例: `["SNOW-007"]`）。 |
-| `interactive` | `boolean` | `false` | `fix` コマンドで変更箇所（Hunk）ごとに承認プロンプトを出すか。 |
+| `interactive` | `boolean` | `false` | `patch` コマンドで変更箇所（Hunk）ごとに承認プロンプトを出すか。 |
 | `show_diff` | `boolean` | `true` | ターミナル上にカラー Unified Diff を出力するか。 |
 | `write_in_place` | `boolean` | `false` | 元の SQL ファイルを直接上書き保存するか。 |
 | `output_patch` | `string \| null` | `null` | 生成された差分を保存する `.patch` ファイルのパス。 |
@@ -358,7 +383,7 @@ export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="your_password"
 icepick check models/batch_mart.sql --config icepick.json
 
 # 最適化時
-icepick fix models/batch_mart.sql -c icepick.json --dry-run
+icepick rewrite models/batch_mart.sql -c icepick.json
 ```
 
 ---

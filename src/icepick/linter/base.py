@@ -9,6 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from sqlglot import exp
 
@@ -72,6 +73,24 @@ class DiagnosticIssue:
     def can_auto_fix(self) -> bool:
         """Whether this issue can be fixed deterministically without LLM assistance."""
         return not self.requires_llm
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert DiagnosticIssue to a dictionary representation.
+
+        Returns:
+            dict[str, Any]: Serialized dictionary representation of the issue.
+        """
+        return {
+            "rule_id": self.rule_id,
+            "rule_name": self.rule_name,
+            "severity": (
+                self.severity.value if isinstance(self.severity, Severity) else str(self.severity)
+            ),
+            "line": self.line_number,
+            "description": self.description,
+            "snippet": self.snippet,
+            "can_auto_fix": self.can_auto_fix,
+        }
 
 
 class BaseRule(ABC):

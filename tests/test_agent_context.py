@@ -38,8 +38,16 @@ class TestAgentContextUnit:
         """Verify that all core CLI commands are documented with arguments and options."""
         ctx = get_agent_context()
         commands = ctx["commands"]
-        expected_commands = {"check", "fix", "verify", "feedback", "agent-context"}
+        expected_commands = {
+            "check",
+            "rewrite",
+            "patch",
+            "verify",
+            "feedback",
+            "agent-context",
+        }
         assert expected_commands.issubset(commands.keys())
+        assert "fix" not in commands
 
         for cmd_name in expected_commands:
             cmd_info = commands[cmd_name]
@@ -51,13 +59,19 @@ class TestAgentContextUnit:
         assert "file" in commands["check"]["arguments"]
         assert commands["check"]["arguments"]["file"]["required"] is True
 
-        # Check options for 'fix'
-        fix_opts = commands["fix"]["options"]
-        assert "--diff" in fix_opts
-        assert "--write" in fix_opts
-        assert "--patch" in fix_opts
-        assert "--dry-run" in fix_opts
-        assert "--force" in fix_opts
+        # Check options for 'rewrite'
+        rewrite_opts = commands["rewrite"]["options"]
+        assert "--output" in rewrite_opts
+        assert "--category" in rewrite_opts
+        assert "--flatten-subqueries" in rewrite_opts
+        assert "--json" in rewrite_opts
+
+        # Check options for 'patch'
+        patch_opts = commands["patch"]["options"]
+        assert "--interactive" in patch_opts
+        assert "--dry-run" in patch_opts
+        assert "--force" in patch_opts
+        assert "--json" in patch_opts
 
         # Check options for 'verify'
         verify_opts = commands["verify"]["options"]
@@ -66,7 +80,7 @@ class TestAgentContextUnit:
         # Check --dialect choices
         expected_dialects = ["snowflake", "postgres", "duckdb", "bigquery"]
         assert commands["check"]["options"]["--dialect"]["choices"] == expected_dialects
-        assert commands["fix"]["options"]["--dialect"]["choices"] == expected_dialects
+        assert commands["rewrite"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["verify"]["options"]["--dialect"]["choices"] == expected_dialects
 
     def test_rules_coverage(self) -> None:

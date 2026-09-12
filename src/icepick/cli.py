@@ -17,10 +17,10 @@ from rich.table import Table
 from icepick import __version__
 from icepick.agent_context import get_agent_context
 from icepick.config import Config
-from icepick.diff.formatter import format_diff, render_diff
+from icepick.diff import apply_unified_diff, format_diff, render_diff, split_hunks
 from icepick.exceptions import AuthenticationError, ParseError
 from icepick.feedback import FeedbackRecorder
-from icepick.linter.base import Severity
+from icepick.linter.base import DiagnosticIssue, Severity
 from icepick.linter.engine import LinterEngine
 from icepick.linter.rules import (
     CorrelatedSubqueryRule,
@@ -68,6 +68,22 @@ def _validate_dialect(dialect: str) -> str:
         )
         raise typer.Exit(code=1)
     return normalized
+
+
+VALID_SEVERITIES: tuple[str, ...] = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+
+SEVERITY_ORDER: dict[str, int] = {
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+    "CRITICAL": 4,
+}
+
+
+def _get_severity_rank(severity: Severity | str) -> int:
+    """Return numeric rank for a severity level."""
+    val = severity.value if isinstance(severity, Severity) else str(severity)
+    return SEVERITY_ORDER.get(val.upper(), 0)
 
 
 def version_callback(value: bool) -> None:
@@ -173,22 +189,7 @@ def check(
     issues = engine.diagnose(ast)
 
     if json_output:
-        issues_data = [
-            {
-                "rule_id": issue.rule_id,
-                "rule_name": issue.rule_name,
-                "severity": (
-                    issue.severity.value
-                    if isinstance(issue.severity, Severity)
-                    else str(issue.severity)
-                ),
-                "line": issue.line_number,
-                "description": issue.description,
-                "snippet": issue.snippet,
-                "can_auto_fix": issue.can_auto_fix,
-            }
-            for issue in issues
-        ]
+        issues_data = [issue.to_dict() for issue in issues]
         typer.echo(json.dumps(issues_data, ensure_ascii=False, indent=2))
         if not issues:
             raise typer.Exit(code=0)
@@ -224,65 +225,42 @@ def check(
     raise typer.Exit(code=1)
 
 
-@app.command("fix")
-def fix(
+@app.command("rewrite")
+def rewrite(
     file: Path = typer.Argument(
         ...,
         exists=True,
         file_okay=True,
         dir_okay=False,
         readable=True,
-        help="Path to the Snowflake SQL file to fix.",
+        help="Path to the Snowflake SQL file to rewrite.",
     ),
-    diff: bool = typer.Option(
-        False,
-        "--diff",
-        help="Show unified diff of changes in terminal.",
-    ),
-    write: bool = typer.Option(
-        False,
-        "--write",
-        "-w",
-        help="Overwrite the original SQL file with optimized code.",
-    ),
-    patch: Path | None = typer.Option(
+    output: Path | None = typer.Option(
         None,
-        "--patch",
-        "-p",
+        "--output",
+        "-o",
         help="Save the unified diff output to the specified .patch file.",
-    ),
-    interactive: bool = typer.Option(
-        False,
-        "--interactive",
-        "-i",
-        help="Prompt for interactive confirmation before applying each fix.",
-    ),
-    flatten_subqueries: bool = typer.Option(
-        False,
-        "--flatten-subqueries",
-        help="Flatten inline derived tables to top-level CTEs.",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Simulate fixes without modifying files or saving patches.",
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Force overwrite files in non-interactive environments.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help="Output fix result as structured JSON to stdout.",
     ),
     dialect: str = typer.Option(
         "snowflake",
         "--dialect",
         "-d",
         help="SQL dialect to use for parsing.",
+    ),
+    category: str | None = typer.Option(
+        None,
+        "--category",
+        help="Severity category filter (CRITICAL, HIGH, MEDIUM, LOW).",
+    ),
+    flatten_subqueries: bool = typer.Option(
+        False,
+        "--flatten-subqueries",
+        help="Flatten inline derived tables to top-level CTEs.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Output rewrite result as structured JSON to stdout.",
     ),
     config: Path | None = typer.Option(
         None,
@@ -295,14 +273,23 @@ def fix(
         help="Path to configuration file (.json or .toml).",
     ),
 ) -> None:
-    """Fix detected issues in a SQL file and optionally format / flatten queries."""
+    """Optimize Snowflake SQL queries and output Unified Diff (read-only)."""
     dialect = _validate_dialect(dialect)
 
-    if write and not dry_run and not sys.stdin.isatty() and not force:
-        err_console.print(
-            "error: Overwriting files in non-interactive environment requires --force flag, or use --patch to output a patch file."
-        )
-        raise typer.Exit(code=1)
+    target_rank: int | None = None
+    if category is not None:
+        norm_cat = category.strip().upper()
+        if norm_cat not in VALID_SEVERITIES:
+            valid_list = ", ".join(VALID_SEVERITIES)
+            err_console.print(
+                f"[bold red]Error:[/bold red] Invalid category '{category}'. "
+                f"Supported severity categories are: {valid_list}."
+            )
+            err_console.print(
+                f"[yellow]Actionable Advice:[/yellow] Specify one of the valid categories: {valid_list}."
+            )
+            raise typer.Exit(code=1)
+        target_rank = SEVERITY_ORDER[norm_cat]
 
     try:
         original_sql = file.read_text(encoding="utf-8")
@@ -314,6 +301,9 @@ def fix(
         ast = parse_snowflake_sql(original_sql, dialect=dialect)
     except ParseError as exc:
         err_console.print(f"[bold red]Parse Error:[/bold red] {exc.message}")
+        line_info = f" (Line {exc.line}, Column {exc.col})" if exc.line else ""
+        if line_info:
+            err_console.print(f"[yellow]Location:{line_info}[/yellow]")
         raise typer.Exit(code=2) from exc
 
     cfg = _load_config(config)
@@ -321,124 +311,204 @@ def fix(
     issues = engine.diagnose(ast)
     auto_fixable_issues = [i for i in issues if i.can_auto_fix and i.rule_id != "SNOW-007"]
 
+    if target_rank is not None:
+        auto_fixable_issues = [
+            i for i in auto_fixable_issues if _get_severity_rank(i.severity) >= target_rank
+        ]
+
     patcher = ASTPatcher(dialect=dialect)
-    fixed_rule_ids: list[str] = []
+    applied_issues: list[DiagnosticIssue] = []
+    if auto_fixable_issues:
+        ast, applied = patcher.apply_all(ast, auto_fixable_issues)
+        applied_issues.extend(applied)
 
-    if interactive:
-        for issue in auto_fixable_issues:
-            backup_ast = ast.copy()
-            current_sql = ast.sql(dialect=dialect, pretty=True)
-            try:
-                ast = patcher.apply_issue(ast, issue)
-                new_sql = ast.sql(dialect=dialect, pretty=True)
-                hunk_diff = format_diff(current_sql, new_sql, filename=file.name, dialect=dialect)
-                if hunk_diff.strip():
-                    if not json_output:
-                        console.print(render_diff(hunk_diff))
-                    choice = (
-                        typer.prompt(f"Apply fix for {issue.rule_id}? [y/n/q]", default="y")
-                        .strip()
-                        .lower()
-                    )
-                    if choice == "y":
-                        fixed_rule_ids.append(issue.rule_id)
-                    elif choice == "q":
-                        ast = backup_ast
-                        break
-                    else:  # "n" or anything else
-                        ast = backup_ast
-            except Exception as exc:  # noqa: BLE001
-                err_console.print(
-                    f"[yellow]Skipped fix for {issue.rule_id} due to error: {exc}[/yellow]"
-                )
-                ast = backup_ast
-
-        if flatten_subqueries:
-            backup_ast = ast.copy()
-            current_sql = ast.sql(dialect=dialect, pretty=True)
-            try:
-                converter = SubqueryToCTE()
-                ast, _ = converter.flatten_all_subqueries(ast)
-                new_sql = ast.sql(dialect=dialect, pretty=True)
-                diff_sub = format_diff(current_sql, new_sql, filename=file.name, dialect=dialect)
-                if diff_sub.strip():
-                    if not json_output:
-                        console.print(render_diff(diff_sub))
-                    choice = (
-                        typer.prompt("Apply subquery flattening to CTE? [y/n/q]", default="y")
-                        .strip()
-                        .lower()
-                    )
-                    if choice == "y":
-                        fixed_rule_ids.append("SNOW-007")
-                    else:
-                        ast = backup_ast
-            except Exception as exc:  # noqa: BLE001
-                err_console.print(
-                    f"[yellow]Skipped subquery flattening due to error: {exc}[/yellow]"
-                )
-                ast = backup_ast
-    else:
-        # Non-interactive batch application
-        if auto_fixable_issues:
-            ast, applied = patcher.apply_all(ast, auto_fixable_issues)
-            fixed_rule_ids.extend([issue.rule_id for issue in applied])
-
-        if flatten_subqueries:
-            converter = SubqueryToCTE()
-            ast, _ = converter.flatten_all_subqueries(ast)
-            # If flattened subqueries were extracted, add SNOW-007
-            fixed_rule_ids.append("SNOW-007")
+    if flatten_subqueries:
+        converter = SubqueryToCTE(dialect=dialect)
+        ast, _ = converter.flatten_all_subqueries(ast)
 
     optimized_sql = ast.sql(dialect=dialect, pretty=True)
-    full_diff = format_diff(original_sql, optimized_sql, filename=file.name, dialect=dialect)
+    diff_text = format_diff(original_sql, optimized_sql, filename=file.name, dialect=dialect)
 
-    if not full_diff.strip():
+    if not diff_text.strip():
         if json_output:
-            typer.echo(
-                json.dumps(
-                    {
-                        "status": "unchanged",
-                        "file": str(file),
-                        "issues_fixed": [],
-                        "diff": "",
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
+            payload = {
+                "file": str(file),
+                "has_changes": False,
+                "issues_count": 0,
+                "diff": "",
+                "issues": [],
+            }
+            typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
-            console.print("[bold green]No modifications needed.[/bold green]")
+            if output is not None:
+                output.write_text("", encoding="utf-8")
+                console.print(
+                    f"[bold green]No optimizable issues found. Saved empty patch to {output}[/bold green]"
+                )
+            else:
+                console.print("[bold green]No optimizable issues found.[/bold green]")
         raise typer.Exit(code=0)
 
-    # Save patch if requested and not in dry-run mode
-    if patch is not None and not dry_run:
-        patch.write_text(full_diff, encoding="utf-8")
+    if output is not None:
+        output.write_text(diff_text, encoding="utf-8")
         if not json_output:
-            console.print(f"[bold green]Saved patch to {patch}[/bold green]")
+            console.print(f"[bold green]Saved patch to {output}[/bold green]")
         else:
-            err_console.print(f"[bold green]Saved patch to {patch}[/bold green]")
-
-    # Write modified file if requested and not in dry-run mode
-    if write and not dry_run:
-        file.write_text(optimized_sql + "\n", encoding="utf-8")
-        if not json_output:
-            console.print(f"[bold green]Successfully updated {file}[/bold green]")
-        else:
-            err_console.print(f"[bold green]Successfully updated {file}[/bold green]")
+            err_console.print(f"[bold green]Saved patch to {output}[/bold green]")
 
     if json_output:
-        output_payload = {
-            "status": "optimized",
+        payload = {
             "file": str(file),
-            "issues_fixed": fixed_rule_ids,
-            "diff": full_diff,
+            "has_changes": True,
+            "issues_count": len(applied_issues),
+            "diff": diff_text,
+            "issues": [i.to_dict() for i in applied_issues],
         }
-        typer.echo(json.dumps(output_payload, ensure_ascii=False, indent=2))
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        # Show diff if --diff is explicitly set, --dry-run is set, or neither --write nor --patch is specified
-        if diff or dry_run or (not write and patch is None):
-            console.print(render_diff(full_diff))
+        if output is None:
+            render_diff(diff_text, console=console)
+
+    raise typer.Exit(code=0)
+
+
+@app.command("patch")
+def patch(
+    target_file: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the Snowflake SQL file to patch.",
+    ),
+    patch_file: Path | None = typer.Argument(
+        None,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Optional path to .patch file. If omitted, diff is read from stdin.",
+    ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        "-i",
+        help="Prompt for interactive confirmation before applying each hunk.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Simulate patch application without modifying the target file.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force overwrite files in non-interactive environments.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Output patch result as structured JSON to stdout.",
+    ),
+) -> None:
+    """Apply a Unified Diff patch to a Snowflake SQL file."""
+    # 1. Read Diff
+    if patch_file is not None:
+        try:
+            diff_text = patch_file.read_text(encoding="utf-8")
+        except Exception as exc:
+            err_console.print(f"[bold red]Error reading patch file {patch_file}:[/bold red] {exc}")
+            raise typer.Exit(code=2) from exc
+    else:
+        diff_text = sys.stdin.read()
+
+    hunks = split_hunks(diff_text)
+    if not diff_text.strip() or not hunks:
+        err_console.print("Error: No diff content or hunks found in patch input.")
+        raise typer.Exit(code=1)
+
+    # 2. Safety Guard
+    if not dry_run and not sys.stdin.isatty() and not force:
+        err_console.print(
+            "error: Overwriting files in non-interactive environment requires --force flag "
+            "(e.g. icepick patch query.sql --force)."
+        )
+        raise typer.Exit(code=1)
+
+    # 3. Interactive hunk selection
+    selected_hunks: list[int] | None = None
+    if interactive:
+        selected_hunks = []
+        for idx, hunk in enumerate(hunks):
+            if not json_output:
+                console.print(render_diff(hunk.to_text()))
+            choice = (
+                typer.prompt(
+                    "Apply this hunk? [y,n,q]",
+                    default="y",
+                    show_default=False,
+                )
+                .strip()
+                .lower()
+            )
+            if choice == "y" or choice.startswith("y"):
+                selected_hunks.append(idx)
+            elif choice == "q" or choice.startswith("q"):
+                break
+            # 'n' or other inputs skip this hunk
+
+    # 4. Apply patch
+    try:
+        original_sql = target_file.read_text(encoding="utf-8")
+    except Exception as exc:
+        err_console.print(f"[bold red]Error reading target file {target_file}:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    try:
+        patched_text, applied_count, total_count = apply_unified_diff(
+            original_sql, diff_text, selected_hunks=selected_hunks
+        )
+    except ValueError as exc:
+        err_console.print(f"[bold red]Error applying patch:[/bold red] {exc}")
+        err_console.print(
+            "[yellow]Actionable Advice:[/yellow] Ensure the target file has not been modified since the diff was generated, "
+            "or re-generate the patch using 'icepick rewrite <file>'."
+        )
+        raise typer.Exit(code=1) from exc
+
+    # 5. Save changes
+    if not dry_run:
+        target_file.write_text(patched_text, encoding="utf-8")
+
+    # 6. Output
+    if json_output:
+        if dry_run:
+            status = "dry_run"
+        elif applied_count == 0:
+            status = "skipped"
+        else:
+            status = "applied"
+
+        payload = {
+            "status": status,
+            "file": str(target_file),
+            "hunks_applied": applied_count,
+            "hunks_total": total_count,
+        }
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        if dry_run:
+            console.print(
+                f"[yellow]Dry-run: Simulated applying {applied_count}/{total_count} hunk(s) to {target_file}[/yellow]"
+            )
+        elif applied_count == 0:
+            console.print(f"[yellow]No hunks applied (0/{total_count}) to {target_file}[/yellow]")
+        else:
+            console.print(
+                f"[bold green]✓ Successfully applied {applied_count}/{total_count} hunk(s) to {target_file}[/bold green]"
+            )
 
     raise typer.Exit(code=0)
 

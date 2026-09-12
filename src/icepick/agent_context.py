@@ -53,48 +53,78 @@ def get_agent_context() -> dict[str, Any]:
                     },
                 },
             },
-            "fix": {
-                "description": "Fix detected issues in a SQL file and optionally format / flatten queries.",
+            "rewrite": {
+                "description": "Optimize Snowflake SQL queries and output Unified Diff (read-only).",
                 "arguments": {
                     "file": {
                         "type": "Path",
                         "required": True,
-                        "description": "Path to the Snowflake SQL file to fix.",
+                        "description": "Path to the Snowflake SQL file to rewrite.",
                     }
                 },
                 "options": {
-                    "--diff": {
-                        "type": "bool",
-                        "default": False,
-                        "description": "Show unified diff of changes in terminal.",
-                    },
-                    "--write": {
-                        "flag": "-w",
-                        "type": "bool",
-                        "default": False,
-                        "description": "Overwrite the original SQL file with optimized code.",
-                    },
-                    "--patch": {
-                        "flag": "-p",
+                    "--output": {
+                        "flag": "-o",
                         "type": "Path",
                         "default": None,
                         "description": "Save the unified diff output to the specified .patch file.",
                     },
-                    "--interactive": {
-                        "flag": "-i",
-                        "type": "bool",
-                        "default": False,
-                        "description": "Prompt for interactive confirmation before applying each fix.",
+                    "--dialect": {
+                        "flag": "-d",
+                        "type": "str",
+                        "default": "snowflake",
+                        "choices": ["snowflake", "postgres", "duckdb", "bigquery"],
+                        "description": "SQL dialect to use for parsing.",
+                    },
+                    "--category": {
+                        "type": "str",
+                        "default": None,
+                        "choices": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                        "description": "Severity category filter (CRITICAL, HIGH, MEDIUM, LOW).",
                     },
                     "--flatten-subqueries": {
                         "type": "bool",
                         "default": False,
                         "description": "Flatten inline derived tables to top-level CTEs.",
                     },
+                    "--json": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Output rewrite result as structured JSON to stdout.",
+                    },
+                    "--config": {
+                        "flag": "-c",
+                        "type": "Path",
+                        "default": None,
+                        "description": "Path to configuration file (.json or .toml).",
+                    },
+                },
+            },
+            "patch": {
+                "description": "Apply a Unified Diff patch to a Snowflake SQL file.",
+                "arguments": {
+                    "target_file": {
+                        "type": "Path",
+                        "required": True,
+                        "description": "Path to the Snowflake SQL file to patch.",
+                    },
+                    "patch_file": {
+                        "type": "Path",
+                        "required": False,
+                        "description": "Optional path to .patch file. If omitted, diff is read from stdin.",
+                    },
+                },
+                "options": {
+                    "--interactive": {
+                        "flag": "-i",
+                        "type": "bool",
+                        "default": False,
+                        "description": "Prompt for interactive confirmation before applying each hunk.",
+                    },
                     "--dry-run": {
                         "type": "bool",
                         "default": False,
-                        "description": "Simulate fixes without modifying files or saving patches.",
+                        "description": "Simulate patch application without modifying the target file.",
                     },
                     "--force": {
                         "flag": "-f",
@@ -105,20 +135,7 @@ def get_agent_context() -> dict[str, Any]:
                     "--json": {
                         "type": "bool",
                         "default": False,
-                        "description": "Output fix result as structured JSON to stdout.",
-                    },
-                    "--dialect": {
-                        "flag": "-d",
-                        "type": "str",
-                        "default": "snowflake",
-                        "choices": ["snowflake", "postgres", "duckdb", "bigquery"],
-                        "description": "SQL dialect to use for parsing.",
-                    },
-                    "--config": {
-                        "flag": "-c",
-                        "type": "Path",
-                        "default": None,
-                        "description": "Path to configuration file (.json or .toml).",
+                        "description": "Output patch result as structured JSON to stdout.",
                     },
                 },
             },

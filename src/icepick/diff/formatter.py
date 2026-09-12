@@ -10,6 +10,7 @@ import difflib
 import re
 from dataclasses import dataclass
 
+from rich.console import Console
 from rich.syntax import Syntax
 
 from icepick.parser import parse_snowflake_sql
@@ -100,6 +101,7 @@ def render_diff(
     diff_text: str,
     theme: str = "ansi_dark",
     line_numbers: bool = False,
+    console: Console | None = None,
 ) -> Syntax:
     """Render a Unified Diff string as a rich Syntax object for terminal display.
 
@@ -107,17 +109,21 @@ def render_diff(
         diff_text: Unified diff formatted text.
         theme: Pygments syntax highlighting theme (default: "ansi_dark").
         line_numbers: Whether to show line numbers in terminal output.
+        console: Optional Rich console to print the rendered diff to.
 
     Returns:
         Syntax: Renderable Rich syntax object.
     """
-    return Syntax(
+    syntax = Syntax(
         diff_text,
         lexer="diff",
         theme=theme,
         line_numbers=line_numbers,
         word_wrap=True,
     )
+    if console is not None:
+        console.print(syntax)
+    return syntax
 
 
 def split_hunks(diff_text: str) -> list[DiffHunk]:
