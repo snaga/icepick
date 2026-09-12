@@ -1,0 +1,6 @@
+# Core Dependencies for Icepick for Snowflake
+sqlglot>=30.0.0
+rich>=13.0.0
+typer>=0.9.0
+httpx>=0.25.0
+google-auth>=2.0.0
