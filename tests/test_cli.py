@@ -47,6 +47,40 @@ class TestCli:
         assert "Diagnostic Report" in result.output
         assert "Found 3 issue(s)" in result.output
 
+    def test_check_snow_002_correlated_subquery_exits_1(self, tmp_path: Path) -> None:
+        """Test that check detects SNOW-002 correlated subquery with CRITICAL severity and exits 1."""
+        sql_file = tmp_path / "correlated.sql"
+        sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(sql, encoding="utf-8")
+
+        result = runner.invoke(app, ["check", str(sql_file)])
+        assert result.exit_code == 1
+        assert "SNOW-002" in result.output
+        assert "CRITICAL" in result.output
+        assert "Correlated Subquery" in result.output
+        assert "Diagnostic Report" in result.output
+        assert "Found 1 issue(s)" in result.output
+
+    def test_check_snow_002_correlated_subquery_json_output(self, tmp_path: Path) -> None:
+        """Test that check --json outputs SNOW-002 with CRITICAL severity and exits 1."""
+        sql_file = tmp_path / "correlated.sql"
+        sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(sql, encoding="utf-8")
+
+        result = runner.invoke(app, ["check", str(sql_file), "--json"])
+        assert result.exit_code == 1
+        parsed = json.loads(result.output)
+        assert len(parsed) == 1
+        assert parsed[0]["rule_id"] == "SNOW-002"
+        assert parsed[0]["severity"] == "CRITICAL"
+        assert parsed[0]["can_auto_fix"] is False
+
     def test_check_parse_error_exits_2(self, tmp_path: Path) -> None:
         """Test that check on invalid SQL syntax exits with 2."""
         sql_file = tmp_path / "bad.sql"

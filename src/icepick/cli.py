@@ -23,6 +23,7 @@ from icepick.feedback import FeedbackRecorder
 from icepick.linter.base import Severity
 from icepick.linter.engine import LinterEngine
 from icepick.linter.rules import (
+    CorrelatedSubqueryRule,
     DuplicateTableScanRule,
     ImplicitCrossJoinRule,
     NestedSubqueryRule,
@@ -108,6 +109,7 @@ def _create_engine(cfg: Config) -> LinterEngine:
     """Create and configure LinterEngine with default rules."""
     engine = LinterEngine(config=cfg)
     engine.register_rule(NonSargableRule())
+    engine.register_rule(CorrelatedSubqueryRule())
     engine.register_rule(RedundantSortRule())
     engine.register_rule(ImplicitCrossJoinRule())
     engine.register_rule(DuplicateTableScanRule())

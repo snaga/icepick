@@ -204,7 +204,7 @@ def get_agent_context() -> dict[str, Any]:
                 "id": "SNOW-002",
                 "name": "CorrelatedSubqueryRule",
                 "severity": "CRITICAL",
-                "description": "Detects correlated subqueries referencing outer query tables that may trigger repetitive table scans and memory spilling. (Note: Future scope in v0.1.x)",
+                "description": "Detects correlated subqueries referencing outer query tables that may trigger repetitive table scans and memory spilling.",
                 "can_auto_fix": False,
             },
             {

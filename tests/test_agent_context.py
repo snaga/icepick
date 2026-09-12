@@ -104,7 +104,10 @@ class TestAgentContextUnit:
         assert snow_002["name"] == "CorrelatedSubqueryRule"
         assert snow_002["can_auto_fix"] is False
         assert snow_002["severity"] == "CRITICAL"
-        assert "(Note: Future scope in v0.1.x)" in snow_002["description"]
+        assert (
+            snow_002["description"]
+            == "Detects correlated subqueries referencing outer query tables that may trigger repetitive table scans and memory spilling."
+        )
 
         snow_003 = next(r for r in rules if r["id"] == "SNOW-003")
         assert snow_003["name"] == "RedundantSortRule"
