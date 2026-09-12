@@ -324,7 +324,7 @@ export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="your_password"
   "output_patch": "patches/optimizer.patch",
   "llm_enabled": true,
   "llm_provider": "gemini",
-  "llm_model": "gemini-2.5-flash"
+  "llm_model": "gemini-3.8-flash"
 }
 ```
 
@@ -345,7 +345,7 @@ export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="your_password"
 | `output_patch` | `string \| null` | `null` | 生成された差分を保存する `.patch` ファイルのパス。 |
 | `llm_enabled` | `boolean` | `false` | 局所 LLM リライト機能を有効化するか。 |
 | `llm_provider` | `string` | `"gemini"` | LLM サービスプロバイダ (`"gemini"` または `"vertex"`)。 |
-| `llm_model` | `string` | `"gemini-2.5-flash"` | 使用する LLM モデル名。 |
+| `llm_model` | `string` | `"gemini-3.8-flash"` | 使用する LLM モデル名。 |
 | `gcp_project` | `string \| null` | `null` | Vertex AI 利用時の Google Cloud プロジェクト ID。 |
 | `gcp_location` | `string \| null` | `"us-central1"` | Vertex AI 利用時の Google Cloud リージョン。 |
 

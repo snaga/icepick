@@ -61,7 +61,7 @@ class TestLLMClient:
 
         llm = LLMClient(
             provider="gemini",
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             api_key="test-api-key",
             http_client=client,
         )
@@ -77,14 +77,15 @@ class TestLLMClient:
         assert req.method == "POST"
         assert (
             req.url
-            == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+            == "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
         )
         assert req.headers["x-goog-api-key"] == "test-api-key"
         assert req.headers["Content-Type"] == "application/json"
 
         body = json.loads(req.content.decode("utf-8"))
-        assert body["contents"][0]["parts"][0]["text"] == slice_ctx.prompt
-        assert body["generationConfig"]["temperature"] == 0.0
+        assert body == {"contents": [{"parts": [{"text": slice_ctx.prompt}]}]}
+        assert "generationConfig" not in body
+        assert "temperature" not in str(body)
 
     def test_vertex_generate_text_and_rewrite_success(self) -> None:
         """Test successful text generation and AST rewriting using Vertex AI provider."""
@@ -128,6 +129,11 @@ class TestLLMClient:
             )
             assert str(req.url) == expected_url
             assert req.headers["Authorization"] == "Bearer mock-bearer-token-12345"
+
+            body = json.loads(req.content.decode("utf-8"))
+            assert body == {"contents": [{"parts": [{"text": slice_ctx.prompt}]}]}
+            assert "generationConfig" not in body
+            assert "temperature" not in str(body)
 
     def test_vertex_token_refresh_when_invalid(self) -> None:
         """Test that google-auth token is refreshed when invalid."""
@@ -334,18 +340,24 @@ class TestLLMClient:
         with pytest.raises(ValueError, match="Unsupported LLM provider"):
             LLMClient(provider="unsupported_ai")
 
+    def test_initialization_defaults(self) -> None:
+        """Test default model and provider values when no config or overrides are provided."""
+        llm = LLMClient(api_key="mock-key")
+        assert llm.provider == "gemini"
+        assert llm.model == "gemini-3.8-flash"
+
     def test_initialization_from_config(self) -> None:
         """Test initializing LLMClient with a Config instance."""
         config = Config(
             llm_provider="gemini",
-            llm_model="gemini-2.5-flash",
+            llm_model="gemini-3.8-flash",
             gemini_api_key="cfg-key",
             gcp_project="cfg-project",
             gcp_location="us-east4",
         )
         llm = LLMClient(config=config)
         assert llm.provider == "gemini"
-        assert llm.model == "gemini-2.5-flash"
+        assert llm.model == "gemini-3.8-flash"
         assert llm.api_key == "cfg-key"
         assert llm.project == "cfg-project"
         assert llm.location == "us-east4"

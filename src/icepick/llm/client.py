@@ -107,7 +107,7 @@ class LLMClient:
         Args:
             config: Optional Config instance to pull defaults from.
             provider: LLM service provider ("gemini" or "vertex").
-            model: Model name (e.g. "gemini-2.5-flash").
+            model: Model name (e.g. "gemini-3.8-flash").
             api_key: API key for Google AI Studio Gemini API.
             project: Google Cloud project ID for Vertex AI.
             location: Google Cloud region for Vertex AI.
@@ -176,7 +176,6 @@ class LLMClient:
         """Construct the URL, headers, and JSON body for the REST request."""
         payload: dict[str, Any] = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.0},
         }
 
         if self.provider == "gemini":

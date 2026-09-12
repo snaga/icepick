@@ -40,7 +40,7 @@ class Config:
     output_patch: str | None = None
     llm_enabled: bool = False
     llm_provider: str = "gemini"
-    llm_model: str = "gemini-2.5-flash"
+    llm_model: str = "gemini-3.8-flash"
     gemini_api_key: str | None = None
     gcp_project: str | None = None
     gcp_location: str | None = None
@@ -138,7 +138,7 @@ class Config:
         interactive = _bool_from_env("ICEPICK_INTERACTIVE", False)
         llm_enabled = _bool_from_env("ICEPICK_LLM_ENABLED", False)
         llm_provider = os.environ.get("ICEPICK_LLM_PROVIDER", "gemini")
-        llm_model = os.environ.get("ICEPICK_LLM_MODEL", "gemini-2.5-flash")
+        llm_model = os.environ.get("ICEPICK_LLM_MODEL", "gemini-3.8-flash")
 
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
         gcp_project = os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")

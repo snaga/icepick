@@ -17,7 +17,7 @@ def test_default_config() -> None:
     assert cfg.output_patch is None
     assert not cfg.llm_enabled
     assert cfg.llm_provider == "gemini"
-    assert cfg.llm_model == "gemini-2.5-flash"
+    assert cfg.llm_model == "gemini-3.8-flash"
 
 
 def test_optimizer_config_alias() -> None:
@@ -131,7 +131,7 @@ def test_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not cfg.interactive
     assert not cfg.llm_enabled
     assert cfg.llm_provider == "gemini"
-    assert cfg.llm_model == "gemini-2.5-flash"
+    assert cfg.llm_model == "gemini-3.8-flash"
     assert cfg.gemini_api_key is None
     assert cfg.gcp_project is None
     assert cfg.gcp_location is None
