@@ -112,9 +112,21 @@ class OptimizationResult:
   5. 元のサブクエリノードを `exp.Table(this=cte_alias, alias=original_alias)` で置換。
 
 ### 3.3 `ContextSlicer` & `LLMClient` (`icepick/llm/`)
-- 対応要件: B-3, C-1
-- `ContextSlicer`:
-  - ターゲットノード（相関サブクエリ等）と、親ノード（CTEやテーブル名）、参照されているカラムのスキーマ定義を抽出し、最小限のコンテキストMarkdownを生成。
+- 対応要件: B-3, C-1, C-4
+- **IPO 記述**:
+  - **Input**:
+    - `target_node`: 置換対象の AST ノード（相関サブクエリ、複雑な結合、共通スキャンノード等）
+    - `ast`: クエリ全体のルート AST
+    - `issue`: `DiagnosticIssue`（ルールID、説明、検出メッセージ）
+    - `verification_feedback`: （再試行時）前回の EXCEPT 差分結果または構文エラーメッセージ
+  - **Processing**:
+    1. `ContextSlicer` が対象ノードと直属の親ノード（CTE / 主クエリ）、外部参照テーブル、参照カラム定義を抽出して最小限の Markdown コンテキストを生成。
+    2. `LLMClient` が Gemini (AI Studio) または Vertex AI REST API を呼び出し、プロンプトを送信。
+    3. LLM レスポンスから SQL コードブロックを抽出。
+    4. `sqlglot.parse_one(response_sql, read="snowflake")` で構文検証。構文エラー時は自動リトライまたは安全フォールバック。
+    5. `--verify-loop` 指定時: 生成された置換クエリに対して `EquivalenceVerifier` で Snowflake 双方向 EXCEPT を実行。差分が存在する場合はフィードバックを加えて最大試行回数（`max_retries`）まで自己修復ループを実行。
+  - **Output**:
+    - 最適化された置換 AST ノード（構文検証および等価性検証済み）
 - `LLMClient`:
   - 外部抽象化ライブラリを使わず、`httpx` による軽量REST APIクライアントとして実装。
   - **Gemini (AI Studio) モード**:
@@ -133,15 +145,26 @@ class OptimizationResult:
 
 ### 3.5 `EquivalenceVerifier` (`icepick/verifier/`)
 - 対応要件: D-1
-- 双方向 `EXCEPT` クエリを自動構築してSnowflakeで実行：
-  ```sql
-  WITH orig AS ( <ORIGINAL_SQL> ),
-       opt AS ( <OPTIMIZED_SQL> )
-  SELECT 'orig_not_in_opt' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM orig EXCEPT SELECT * FROM opt)
-  UNION ALL
-  SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM opt EXCEPT SELECT * FROM orig);
-  ```
-- 両方の `cnt` が `0` の場合のみ `is_verified=True`。
+- **IPO 記述**:
+  - **Input**:
+    - `original_sql`: 変更前の SQL クエリ文字列
+    - `optimized_sql`: 最適化後の SQL クエリ文字列
+    - `dialect`: SQL 方言（デフォルト: `"snowflake"`）
+    - `connection`: Snowflake DB コネクションオブジェクト（`snowflake.connector` 準拠）
+  - **Processing**:
+    1. 双方向 `EXCEPT` クエリを自動構築：
+       ```sql
+       WITH orig AS ( <ORIGINAL_SQL> ),
+            opt AS ( <OPTIMIZED_SQL> )
+       SELECT 'orig_not_in_opt' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM orig EXCEPT SELECT * FROM opt)
+       UNION ALL
+       SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM opt EXCEPT SELECT * FROM orig);
+       ```
+    2. Snowflake コネクションを介してクエリを実行し、2 行の結果セット（`orig_not_in_opt` および `opt_not_in_orig` の各カウント）を取得。
+    3. 両方のカウントが `0` の場合のみ `is_equivalent=True` と判定。いずれかが `1` 以上の場合は `is_equivalent=False`。
+    4. 接続エラー・構文エラー発生時は `error_message` を保持して `is_equivalent=False` で復帰。
+  - **Output**:
+    - `VerificationResult` (`is_equivalent: bool`, `orig_not_in_opt_count: int`, `opt_not_in_orig_count: int`, `verification_sql: str`, `error_message: str | None`)
 
 ### 3.6 `FeedbackRecorder` (`icepick/feedback.py` または `cli.py`)
 - 対応要件: E-1
@@ -241,11 +264,37 @@ sequenceDiagram
     Note over Dev,CLI: 3. パッチの適用 (Mutate, Pipe or File)
     Dev->>CLI: icepick patch models/batch.sql changes.patch --interactive
     loop 各Issue (Hunk) ごと
-        CLI->>Dev: Diffプレビュー表示 [y/n/e/q]?
+        CLI->>Dev: Diffプレビュー表示 [y/n/q]?
         Dev-->>CLI: 'y' (適用承認)
     end
     CLI->>Dev: 対象SQLファイル上書き更新完了
 
-    Note over Dev,CLI: (ワンライナーパイプライン例)
-    Note over Dev,CLI: icepick rewrite models/batch.sql | icepick patch models/batch.sql --force
+    Note over Dev,CLI: 4. 等価性の検証 (Verifier)
+    Dev->>CLI: icepick verify models/batch_orig.sql models/batch.sql
+    CLI->>Verifier: verify(orig, opt, conn)
+    Verifier->>Snowflake: 双方向 EXCEPT クエリ実行
+    Snowflake-->>Verifier: diff_type, cnt
+    Verifier-->>CLI: VerificationResult
+    CLI->>Dev: 検証結果表示 (差分0件 PASS / 差分検出 FAIL)
+
+    Note over Dev,CLI: 5. Agentic 最適化 & 自己修復ループ (LLM + Verify Loop)
+    Dev->>CLI: icepick rewrite models/batch.sql --agentic --verify-loop
+    loop 自己修復ループ (最大 N 回)
+        CLI->>Slicer: slice_context(AST, issue)
+        Slicer-->>CLI: Context Markdown
+        CLI->>LLM: generate_replacement(Context)
+        LLM-->>CLI: SQL Snippet
+        CLI->>Parser: parse_one(SQL Snippet)
+        Parser-->>CLI: Replacement AST Node
+        CLI->>Verifier: verify(orig, opt, conn)
+        alt 差分なし (EXCEPT cnt == 0)
+            Verifier-->>CLI: Verification PASS
+        else 差分あり (EXCEPT cnt > 0)
+            Verifier-->>CLI: Verification FAIL (差分件数をフィードバック)
+        end
+    end
+    CLI->>Diff: format_diff(orig, opt)
+    Diff-->>CLI: Verified Unified Diff
+    CLI->>Dev: 検証済み Unified Diff 出力
 ```
+
