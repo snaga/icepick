@@ -48,13 +48,16 @@ Snowflake 上で稼働する夜間バッチや dbt モデルなどの複雑な S
 
 ## 📋 診断ルール一覧 (Diagnostic Rules)
 
-| ルールID | ルール名 | 重要度 | 診断対象と最適化アクション |
-| :--- | :--- | :---: | :--- |
-| **`SNOW-001`** | **Non-Sargable Predicate** | `HIGH` | `DATE(col) = '2026-09-01'` 等の関数ラップによるプルーニング阻害を検知し、`col >= '...' AND col < DATEADD(...)` の範囲条件へ自動置換。 |
-| **`SNOW-003`** | **Redundant Sort in Subquery/CTE** | `MEDIUM` | `LIMIT` / `FETCH` を持たない中間 CTE やサブクエリ内の無意味な `ORDER BY`（Spill や無駄なソートコストの原因）を検知し、安全に削除（`pop()`）。 |
-| **`SNOW-007`** | **Inline Subquery in FROM/JOIN** | `LOW` | FROM 句や JOIN 句に直接埋め込まれた派生テーブルを検知し、トップレベル CTE への抽出・平坦化を推奨。 |
+| ルールID | ルール名 | 重要度 | 自動修正 | 診断対象と最適化アクション |
+| :--- | :--- | :---: | :---: | :--- |
+| **`SNOW-001`** | **Non-Sargable Predicate** | `HIGH` | ✅ | `DATE(col) = '2026-09-01'` 等の関数ラップによるプルーニング阻害を検知し、`col >= '...' AND col < DATEADD(...)` の範囲条件へ自動置換。 |
+| **`SNOW-003`** | **Redundant Sort in Subquery/CTE** | `MEDIUM` | ✅ | `LIMIT` / `FETCH` を持たない中間 CTE やサブクエリ内の無意味な `ORDER BY`（Spill や無駄なソートコストの原因）を検知し、安全に削除（`pop()`）。 |
+| **`SNOW-004`** | **Implicit Cross Join** | `HIGH` | ⚠️ (LLM) | カンマ区切り FROM 句（直積結合リスク）を検知し、明示的 JOIN または `CROSS JOIN` への書き換えを警告。※ `TABLE(FLATTEN(...))` 等の相関展開は安全に除外。 |
+| **`SNOW-005`** | **Duplicate Table Scan** | `MEDIUM` | ⚠️ (LLM) | 同一クエリ内の複数 CTE 間で同一ベーステーブルが重複スキャンされている箇所を検知し、共通 CTE 集約を推奨。 |
+| **`SNOW-006`** | **Union to Union All** | `LOW` | ✅ | 重複排除が不要な `UNION` を検知し、ソート負荷を排除する `UNION ALL` へ自動置換。連鎖 UNION にも完全対応。 |
+| **`SNOW-007`** | **Inline Subquery in FROM/JOIN** | `MEDIUM` | ✅ | FROM 句や JOIN 句に直接埋め込まれた派生テーブルを検知し、トップレベル CTE への抽出・平坦化を推奨。 |
 
-*(※ 将来対応予定: `SNOW-002` 相関副クエリの結合化, `SNOW-004` 暗黙クロス結合, `SNOW-005` 重複テーブルスキャン, `SNOW-006` UNION ALL 置換)*
+*(※ 将来対応予定: `SNOW-002` 相関副クエリの結合化 / Decoupling)*
 
 ---
 
@@ -65,7 +68,7 @@ flowchart TD
     CLI["icepick CLI (Typer / Rich)"] --> Parser["SQLParser (sqlglot)"]
     Parser --> AST["Snowflake Root AST"]
     AST --> Linter["LinterEngine"]
-    Linter --> Rules["Rules (SNOW-001, 003, 007)"]
+    Linter --> Rules["Rules (SNOW-001 ~ SNOW-007)"]
     Rules --> Issues["List[DiagnosticIssue]"]
     Issues --> Patcher["ASTPatcher"]
     Patcher -->|Rule-based| InPlace["In-place Node Replacement"]
