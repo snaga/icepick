@@ -48,3 +48,4 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+.workspace_cache/

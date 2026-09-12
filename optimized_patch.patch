@@ -1,0 +1,53 @@
+--- a/models/marts/sample_batch.sql
++++ b/models/marts/sample_batch.sql
+@@ -16,7 +16,8 @@
+     MAX(event_timestamp) AS last_active
+   FROM raw_events
+   WHERE
+-    TO_DATE(event_timestamp) = '2026-09-01'
++    event_timestamp >= '2026-09-01 00:00:00'
++    AND event_timestamp < DATEADD(DAY, 1, '2026-09-01')
+   GROUP BY
+     user_id
+ ), filtered_customers /* [Issue 2: SNOW-003 Redundant Sort in Subquery] Memory waste in CTE! */ AS (
+@@ -32,25 +33,28 @@
+     FROM analytics.crm.customers AS c
+     WHERE
+       c.is_active = TRUE
+-    ORDER BY
+-      c.customer_id ASC
+   )
+-), high_value_orders /* [Issue 3: SNOW-002 Correlated Subquery] Causes O(N^2) evaluation & Spill! */ AS (
++), high_value_orders AS (
+   SELECT
+     o.order_id,
+     o.customer_id,
+     o.order_amount,
+     o.order_date
+-  FROM analytics.sales.orders AS o
++  FROM (
++    SELECT
++      order_id,
++      customer_id,
++      order_amount,
++      order_date,
++      AVG(order_amount) OVER (
++        PARTITION BY customer_id
++        ORDER BY order_date
++        RANGE BETWEEN INTERVAL '30 DAYS' PRECEDING AND CURRENT ROW
++      ) AS rolling_avg_amount
++    FROM analytics.sales.orders
++  ) AS o
+   WHERE
+-    o.order_amount > (
+-      SELECT
+-        AVG(sub.order_amount)
+-      FROM analytics.sales.orders AS sub
+-      WHERE
+-        sub.customer_id = o.customer_id
+-        AND sub.order_date >= DATEADD(DAY, -30, o.order_date)
+-    )
++    o.order_amount > o.rolling_avg_amount
+ )
+ SELECT
+   fc.customer_id,
