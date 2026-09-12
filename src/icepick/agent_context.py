@@ -82,6 +82,11 @@ def get_agent_context() -> dict[str, Any]:
                         "choices": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
                         "description": "Severity category filter (CRITICAL, HIGH, MEDIUM, LOW).",
                     },
+                    "--agentic": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Enable LLM-assisted targeted rewriting for complex patterns (e.g. correlated subqueries).",
+                    },
                     "--flatten-subqueries": {
                         "type": "bool",
                         "default": False,

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import sqlglot
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from icepick import __version__
 from icepick.cli import app
+from icepick.exceptions import AuthenticationError
 
 runner = CliRunner()
 
@@ -416,6 +418,100 @@ class TestCli:
         result = runner.invoke(app, ["rewrite", str(sql_file)])
         assert result.exit_code == 2
         assert "Parse Error" in result.output
+
+    def test_rewrite_agentic_success(self, tmp_path: Path) -> None:
+        """Test that rewrite --agentic rewrites correlated subquery (SNOW-002) and preserves original file."""
+        sql_file = tmp_path / "correlated.sql"
+        original_sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.provider = "gemini"
+        mock_client.api_key = "mock-api-key"
+        mock_client._auth_error = None
+        # Replacement simulating converting subquery into a join
+        replacement = sqlglot.parse_one(
+            "c.cust_id IN (SELECT o.cust_id FROM orders AS o JOIN customers AS sub_c ON o.cust_id = sub_c.cust_id)"
+        )
+        mock_client.rewrite_fragment.return_value = replacement
+
+        with patch("icepick.cli.LLMClient", return_value=mock_client):
+            result = runner.invoke(app, ["rewrite", str(sql_file), "--agentic"])
+            assert result.exit_code == 0
+            assert "JOIN" in result.output
+            assert "EXISTS" in result.output
+            # Read-only guarantee: original file should remain unchanged
+            assert sql_file.read_text(encoding="utf-8") == original_sql
+
+    def test_rewrite_agentic_auth_error_shows_actionable_advice(self, tmp_path: Path) -> None:
+        """Test that rewrite --agentic outputs actionable advice and exits 1 on auth error."""
+        sql_file = tmp_path / "correlated.sql"
+        original_sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        with patch(
+            "icepick.cli.LLMClient",
+            side_effect=AuthenticationError("No Gemini API key or credentials found"),
+        ):
+            result = runner.invoke(app, ["rewrite", str(sql_file), "--agentic"])
+            assert result.exit_code == 1
+            assert "Authentication Error:" in result.output
+            assert "Actionable Advice:" in result.output
+            assert (
+                "Set GEMINI_API_KEY environment variable or run 'icepick config' / GCP ADC."
+                in result.output
+            )
+            # Read-only guarantee
+            assert sql_file.read_text(encoding="utf-8") == original_sql
+
+    def test_rewrite_agentic_json_output(self, tmp_path: Path) -> None:
+        """Test that rewrite --agentic --json outputs structured JSON with correlated subquery issue in applied_issues."""
+        sql_file = tmp_path / "correlated.sql"
+        original_sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.provider = "gemini"
+        mock_client.api_key = "mock-api-key"
+        mock_client._auth_error = None
+        replacement = sqlglot.parse_one("c.cust_id IN (SELECT o.cust_id FROM orders AS o)")
+        mock_client.rewrite_fragment.return_value = replacement
+
+        with patch("icepick.cli.LLMClient", return_value=mock_client):
+            result = runner.invoke(app, ["rewrite", str(sql_file), "--agentic", "--json"])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["file"] == str(sql_file)
+            assert data["has_changes"] is True
+            assert data["issues_count"] == 1
+            assert len(data["issues"]) == 1
+            assert data["issues"][0]["rule_id"] == "SNOW-002"
+            assert "c.cust_id IN" in data["diff"]
+            # Read-only guarantee
+            assert sql_file.read_text(encoding="utf-8") == original_sql
+
+    def test_rewrite_without_agentic_skips_correlated_subquery(self, tmp_path: Path) -> None:
+        """Test that rewrite without --agentic skips correlated subqueries since they require LLM."""
+        sql_file = tmp_path / "correlated.sql"
+        original_sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        result = runner.invoke(app, ["rewrite", str(sql_file)])
+        assert result.exit_code == 0
+        assert "No optimizable issues found" in result.output
+        assert sql_file.read_text(encoding="utf-8") == original_sql
 
     def test_patch_file_argument(self, tmp_path: Path) -> None:
         """Test applying a patch file directly via argument updates the file."""

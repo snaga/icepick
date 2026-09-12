@@ -169,6 +169,12 @@ icepick rewrite models/batch_mart.sql --flatten-subqueries
 icepick rewrite models/batch_mart.sql --category HIGH
 ```
 
+#### LLM支援による高度なリライト (`--agentic`)
+ルールベースで自動修正できない相関副クエリ（`SNOW-002`）などを、Gemini / Vertex AI による局所スライシングと構文検証を経てリライトします。
+```bash
+icepick rewrite models/batch_mart.sql --agentic
+```
+
 ---
 
 ### 3. パッチの適用 (`patch`)

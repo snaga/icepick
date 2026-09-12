@@ -63,6 +63,8 @@ class TestAgentContextUnit:
         rewrite_opts = commands["rewrite"]["options"]
         assert "--output" in rewrite_opts
         assert "--category" in rewrite_opts
+        assert "--agentic" in rewrite_opts
+        assert rewrite_opts["--agentic"]["type"] == "bool"
         assert "--flatten-subqueries" in rewrite_opts
         assert "--json" in rewrite_opts
 

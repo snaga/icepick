@@ -31,7 +31,9 @@ from icepick.linter.rules import (
     RedundantSortRule,
     UnionToUnionAllRule,
 )
+from icepick.llm.client import LLMClient
 from icepick.parser import parse_snowflake_sql
+from icepick.patcher.agentic import AgenticPatcher
 from icepick.patcher.in_place import ASTPatcher
 from icepick.patcher.subquery_to_cte import SubqueryToCTE
 from icepick.security.credentials import resolve_credential
@@ -252,6 +254,11 @@ def rewrite(
         "--category",
         help="Severity category filter (CRITICAL, HIGH, MEDIUM, LOW).",
     ),
+    agentic: bool = typer.Option(
+        False,
+        "--agentic",
+        help="Enable LLM-assisted targeted rewriting for complex patterns (e.g. correlated subqueries).",
+    ),
     flatten_subqueries: bool = typer.Option(
         False,
         "--flatten-subqueries",
@@ -319,8 +326,41 @@ def rewrite(
     patcher = ASTPatcher(dialect=dialect)
     applied_issues: list[DiagnosticIssue] = []
     if auto_fixable_issues:
+        # Optimization pipeline order:
+        # 1. Deterministic AST rules (ASTPatcher): Clean up static anti-patterns first to minimize AST noise.
         ast, applied = patcher.apply_all(ast, auto_fixable_issues)
         applied_issues.extend(applied)
+
+    # 2. Targeted LLM rewrite (AgenticPatcher): Rewrite complex, semantic-heavy patterns with minimal context.
+    if agentic:
+        agentic_issues = [i for i in issues if i.requires_llm and i.target_node is not None]
+        if target_rank is not None:
+            agentic_issues = [
+                i for i in agentic_issues if _get_severity_rank(i.severity) >= target_rank
+            ]
+        if agentic_issues:
+            try:
+                llm_client = LLMClient(config=cfg)
+                if hasattr(llm_client, "_auth_error") and llm_client._auth_error is not None:
+                    raise llm_client._auth_error
+                if hasattr(llm_client, "provider"):
+                    if llm_client.provider == "gemini" and not getattr(llm_client, "api_key", None):
+                        raise AuthenticationError("Gemini API key is not configured or resolved.")
+                    if llm_client.provider == "vertex":
+                        if not getattr(llm_client, "project", None):
+                            raise ValueError("Google Cloud project ID is required for Vertex AI.")
+                        if hasattr(llm_client, "_get_vertex_token"):
+                            llm_client._get_vertex_token()
+            except (AuthenticationError, ValueError) as exc:
+                err_console.print(f"[bold red]Authentication Error:[/bold red] {exc}")
+                err_console.print(
+                    "[yellow]Actionable Advice:[/yellow] Set GEMINI_API_KEY environment variable or run 'icepick config' / GCP ADC."
+                )
+                raise typer.Exit(code=1) from exc
+
+            agentic_patcher = AgenticPatcher(llm_client=llm_client, dialect=dialect)
+            ast, agentic_applied = agentic_patcher.apply_all(ast, agentic_issues)
+            applied_issues.extend(agentic_applied)
 
     if flatten_subqueries:
         converter = SubqueryToCTE(dialect=dialect)
