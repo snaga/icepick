@@ -64,20 +64,23 @@ class OptimizationResult:
 ## 3. コンポーネント詳細設計
 
 ### 3.1 `LinterEngine` (`icepick/linter/`)
-- 対応要件: A-1, A-2, A-3, A-4, A-5
+- 対応要件: A-1, A-2, A-3, A-4, A-5, A-6, A-7, A-8
 - `BaseRule` を継承した個別ルールクラスを動的にロードして実行する。
 - 各ルールは `check(ast: exp.Expression) -> List[DiagnosticIssue]` を実装する。
 - 個別ルール一覧:
   - `NonSargableRule` (`SNOW-001`): `exp.EQ` 等の比較述語で、カラムへの関数適用を検出し、リテラル側変換の範囲条件ノードを `suggested_replacement` にセット。
-  - `CorrelatedSubqueryRule` (`SNOW-002`): 副クエリ内のカラム参照で外側エイリアスを持つものを検出し、`requires_llm=True` をセット。
+  - `CorrelatedSubqueryRule` (`SNOW-002`): 副クエリ内のカラム参照で外側エイリアスを持つものを検出し、`requires_llm=True` をセット（※将来フェーズで拡張予定）。
   - `RedundantSortRule` (`SNOW-003`): `exp.Subquery` / `exp.CTE` 内の `exp.Order` かつ LIMITなしを検出し、`target_node=order_node`, `suggested_replacement=None` (pop削除) をセット。
   - `NestedSubqueryRule` (`SNOW-007`): `exp.From` や `exp.Join` 内の `exp.Subquery` を検出し、CTE外出し対象としてフラグ付け。
+  - `UnionToUnionAllRule` (`SNOW-006`): 重複排除不要な結合における `exp.Union`（`distinct=True`）を検出し、`distinct=False`（UNION ALL）の置換ノードを `suggested_replacement` にセット。
+  - `ImplicitCrossJoinRule` (`SNOW-004`): `exp.From` 内のカンマ区切り複数テーブル参照を検出し、明示的な `CROSS JOIN` ノードを `suggested_replacement` にセット。
+  - `DuplicateTableScanRule` (`SNOW-005`): 同一クエリ内の複数 CTE 間で同一テーブルの重複スキャンを検出し、共通 CTE 集約の警告を発行。
 
 ### 3.2 `ASTPatcher` & `SubqueryToCTE` (`icepick/patcher/`)
-- 対応要件: B-1, B-2
+- 対応要件: B-1, B-2, B-4, B-5
 - **In-place置換**:
-  - `issue.suggested_replacement` が存在する場合: `issue.target_node.replace(issue.suggested_replacement)`
-  - `suggested_replacement` が None の場合: `issue.target_node.pop()`
+  - `issue.suggested_replacement` が存在する場合: `issue.target_node.replace(issue.suggested_replacement)`（`SNOW-001`, `SNOW-006`, `SNOW-004`）
+  - `suggested_replacement` が None の場合: `issue.target_node.pop()`（`SNOW-003`）
 - **サブクエリのCTE平坦化 (`SubqueryToCTE`)**:
   1. 対象サブクエリの内部SELECT (`subquery.this`) を取得。
   2. 一意なCTE別名（例: `cte_<alias>_<index>`）を決定。
