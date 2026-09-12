@@ -6,11 +6,21 @@
 
 ```mermaid
 flowchart TD
-    CLI["icepick.cli (CLI Controller)"] --> Parser["icepick.parser.SQLParser"]
+    subgraph CLI ["icepick.cli (Command Controller)"]
+        CmdCheck["check"]
+        CmdRewrite["rewrite"]
+        CmdPatch["patch"]
+        CmdVerify["verify"]
+    end
+
+    CmdCheck --> Parser["icepick.parser.SQLParser"]
+    Parser --> AST["Snowflake Root AST"]
     AST --> Linter["icepick.linter.LinterEngine"]
     Linter --> Rules["Rules (SNOW-001 ~ SNOW-007)"]
     Rules --> Issues["List[DiagnosticIssue]"]
-    Issues --> Patcher["icepick.patcher.ASTPatcher"]
+
+    CmdRewrite --> Linter
+    CmdRewrite --> Patcher["icepick.patcher.ASTPatcher"]
     Patcher -->|Rule-based| InPlace["In-place Node Replacement"]
     Patcher -->|LLM-based| Slicer["icepick.llm.ContextSlicer"]
     Slicer --> LLMClient["icepick.llm.LLMClient"]
@@ -18,8 +28,13 @@ flowchart TD
     Patcher -->|Subquery to CTE| CTEExt["icepick.patcher.SubqueryToCTE"]
     CTEExt --> InPlace
     InPlace --> Diff["icepick.diff.DiffFormatter"]
-    Diff --> UI["Rich Terminal Diff / .patch"]
-    UI --> Verifier["icepick.verifier.EquivalenceVerifier"]
+    Diff --> Stdout["stdout / .patch"]
+
+    Stdout -.->|stdin / pipe| CmdPatch
+    CmdPatch --> TargetFile["Target SQL File (In-place Mutation)"]
+
+    CmdVerify --> Verifier["icepick.verifier.EquivalenceVerifier"]
+    TargetFile -.->|Post-apply verification| CmdVerify
     Verifier --> Snowflake["Snowflake DB (EXCEPT Test)"]
 ```
 
@@ -152,14 +167,15 @@ class OptimizationResult:
   - エージェントが初手で実行することで、ヘルプ探索によるトークン消費を最小化する。
 - **構造化出力 (`--json`)**:
   - `check`: 検出された Issue の JSON 配列を出力。
-  - `fix`: 変更ステータス、適用された Issue 一覧、Unified Diff テキストを JSON で出力。
+  - `rewrite`: 最適化ステータス、検出された Issue 一覧、Unified Diff テキストを JSON で出力。
+  - `patch`: 適用ステータス、適用された Hunk 数、対象ファイルパスを JSON で出力。
   - `feedback`: 記録された `FeedbackEntry` を JSON で出力。
   - `agent-context`: ツール仕様メタデータを JSON で出力。
 - **非対話モードと変更境界 (`--dry-run` & `--force`)**:
   - `sys.stdin.isatty()` により対話型ターミナルかパイプ/サブプロセスかを自動判定。
   - 非 TTY 環境ではプロンプト表示による永久ハングを防止。
-  - `--dry-run`: ファイルへの書き込みを一切行わず、最適化後のクエリや Unified Diff のプレビューのみを出力。
-  - 非TTY環境における `--in-place` 実行時は、確認バイパスフラグ `--force`（または `--yes`）を必須とし、未指定時は安全のため処理を中止して `.patch` 出力を案内。
+  - `--dry-run`: `patch` コマンドにおいてファイルへの書き込みを一切行わず、適用シミュレーション結果のみを出力。
+  - 非TTY環境における `patch` 実行時は、確認バイパスフラグ `--force`（または `-f`）を必須とし、未指定時は安全のため処理を中止してエラーを案内。
 - **自己修正エラー (Actionable & Enumerated Errors)**:
   - 引数やオプションのバリデーションエラー時、可能な値の列挙（enumリスト）と、コピペして実行可能な修正コマンド例を出力。
 
@@ -191,7 +207,7 @@ class OptimizationResult:
 - 対応要件: E-8
 - **テスト設計 (`tests/test_agent_readiness.py`)**:
   1. **非TTYハング防止テスト**: `stdin` を `io.StringIO` やパイプ模倣オブジェクトに差し替え、プロンプト待ちでブロックせずに終了することを確認。
-  2. **構造化出力テスト**: 全サブコマンド（`check`, `fix`, `feedback`, `agent-context`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
+  2. **構造化出力テスト**: 全サブコマンド（`check`, `rewrite`, `patch`, `feedback`, `agent-context`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
   3. **Actionable Error検証**: 認証未設定時および不正引数指定時に、有効な enum 一覧および復旧コマンド例が出力に含まれていることを検証。
 
 ## 4. シーケンス図（対話型リファクタリングフロー）
@@ -206,21 +222,30 @@ sequenceDiagram
     participant Patcher as ASTPatcher
     participant Diff as DiffFormatter
 
+    Note over Dev,CLI: 1. 課題の診断 (Read-only)
     Dev->>CLI: icepick check models/batch.sql
     CLI->>Parser: parse(sql_text)
     Parser-->>CLI: AST
     CLI->>Linter: diagnose(AST)
     Linter-->>CLI: List[DiagnosticIssue]
-    CLI->>Dev: 診断テーブル表示 (SNOW-001, 002, 003)
+    CLI->>Dev: 診断テーブル表示 (SNOW-001 ~ SNOW-007)
 
-    Dev->>CLI: icepick fix models/batch.sql --interactive
+    Note over Dev,CLI: 2. 最適化Diffの生成 (Read-only)
+    Dev->>CLI: icepick rewrite models/batch.sql (-o changes.patch)
+    CLI->>Linter: diagnose(AST)
+    CLI->>Patcher: apply_all(issues)
+    CLI->>Diff: format_diff(orig, opt)
+    Diff-->>CLI: Unified Diff
+    CLI->>Dev: Unified Diff (stdout / changes.patch)
+
+    Note over Dev,CLI: 3. パッチの適用 (Mutate, Pipe or File)
+    Dev->>CLI: icepick patch models/batch.sql changes.patch --interactive
     loop 各Issue (Hunk) ごと
-        CLI->>Patcher: apply_issue(issue)
-        CLI->>Diff: format_diff(orig, opt)
-        Diff-->>CLI: Unified Diff (Hunk)
         CLI->>Dev: Diffプレビュー表示 [y/n/e/q]?
         Dev-->>CLI: 'y' (適用承認)
-        CLI->>Patcher: commit_node_replacement()
     end
-    CLI->>Dev: 最適化完了 & .patch 保存
+    CLI->>Dev: 対象SQLファイル上書き更新完了
+
+    Note over Dev,CLI: (ワンライナーパイプライン例)
+    Note over Dev,CLI: icepick rewrite models/batch.sql | icepick patch models/batch.sql --force
 ```

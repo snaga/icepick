@@ -30,10 +30,10 @@ Snowflake上で稼働する長大かつ複雑なバッチクエリ（数百〜�
    - LLMやルールが生成した修正コードを、構文木上で該当ノードのみ機械的に差し替え（`node.replace()`）。
    - クエリ全体の95%の健全なコード構造・インデント・コメントを完全維持。
 
-5. **Unified Diff 形式のレビュー＆インタラクティブ適用**:
-   - `git diff` 互換のカラーDiffプレビュー。
-   - `git add -p` のように変更箇所（Hunk）ごとに開発者が個別適用（`[y]/[n]/[e]/[q]`）できるCLI。
-   - `--diff`（CI用Diff出力）、`--write`（インプレース上書き）、`.patch` ファイル保存。
+5. **パイプライン連携とUnified Diffによる安全な適用 (rewrite & patch)**:
+   - `icepick rewrite`: AST最適化を行い、ノイズのないGit互換Unified Diff/パッチを標準出力に出力（非破壊・Read-only）。
+   - `icepick patch`: 標準入力（`icepick rewrite query.sql | icepick patch query.sql`）またはパッチファイルから安全に変更を適用（唯一のファイル変更コマンド）。
+   - `git add -p` と同様の対話型Hunk個別承認・適用（`--interactive`）およびシミュレーション（`--dry-run`）をサポート。
 
 6. **決定論的等価性自動検証 (Equivalence Verification)**:
    - Snowflake実環境またはテスト環境において、元クエリと新クエリの `EXCEPT` 差分ゼロ検証、または `HASH_AGG` 突合を実行し、セマンティクスの一致を自動証明。
