@@ -7,7 +7,7 @@
 [![Coverage](https://img.shields.io/badge/Coverage-100%25-brightgreen.svg)]()
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-strict-blue)](https://mypy-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ---
 
@@ -397,4 +397,4 @@ uv run mypy src tests
 
 ## 📄 ライセンス
 
-[MIT License](LICENSE)
+[Apache License 2.0](LICENSE)
