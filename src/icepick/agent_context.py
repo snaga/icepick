@@ -204,13 +204,13 @@ def get_agent_context() -> dict[str, Any]:
                 "id": "SNOW-002",
                 "name": "CorrelatedSubqueryRule",
                 "severity": "CRITICAL",
-                "description": "Detects correlated subqueries referencing outer query tables that may trigger repetitive table scans and memory spilling.",
+                "description": "Detects correlated subqueries referencing outer query tables that may trigger repetitive table scans and memory spilling. (Note: Future scope in v0.1.x)",
                 "can_auto_fix": False,
             },
             {
                 "id": "SNOW-003",
                 "name": "RedundantSortRule",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "description": "Detects redundant ORDER BY clauses inside subqueries or CTEs without LIMIT or window functions.",
                 "can_auto_fix": True,
             },
@@ -223,7 +223,7 @@ def get_agent_context() -> dict[str, Any]:
             },
             {
                 "id": "SNOW-005",
-                "name": "DuplicateScanRule",
+                "name": "DuplicateTableScanRule",
                 "severity": "MEDIUM",
                 "description": "Detects duplicate scans of the same large table across multiple CTEs.",
                 "can_auto_fix": False,
@@ -231,9 +231,9 @@ def get_agent_context() -> dict[str, Any]:
             {
                 "id": "SNOW-006",
                 "name": "UnionToUnionAllRule",
-                "severity": "MEDIUM",
-                "description": "Detects UNION without DISTINCT where UNION ALL is sufficient to avoid deduplication sort.",
-                "can_auto_fix": False,
+                "severity": "LOW",
+                "description": "Detects UNION (implicit DISTINCT) where UNION ALL is sufficient to avoid deduplication sort.",
+                "can_auto_fix": True,
             },
             {
                 "id": "SNOW-007",

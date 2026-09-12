@@ -96,18 +96,40 @@ class TestAgentContextUnit:
 
         # Specific rule checks
         snow_001 = next(r for r in rules if r["id"] == "SNOW-001")
+        assert snow_001["name"] == "NonSargableRule"
         assert snow_001["can_auto_fix"] is True
         assert snow_001["severity"] == "HIGH"
 
         snow_002 = next(r for r in rules if r["id"] == "SNOW-002")
+        assert snow_002["name"] == "CorrelatedSubqueryRule"
         assert snow_002["can_auto_fix"] is False
         assert snow_002["severity"] == "CRITICAL"
+        assert "(Note: Future scope in v0.1.x)" in snow_002["description"]
 
         snow_003 = next(r for r in rules if r["id"] == "SNOW-003")
+        assert snow_003["name"] == "RedundantSortRule"
         assert snow_003["can_auto_fix"] is True
+        assert snow_003["severity"] == "MEDIUM"
+
+        snow_004 = next(r for r in rules if r["id"] == "SNOW-004")
+        assert snow_004["name"] == "ImplicitCrossJoinRule"
+        assert snow_004["can_auto_fix"] is False
+        assert snow_004["severity"] == "HIGH"
+
+        snow_005 = next(r for r in rules if r["id"] == "SNOW-005")
+        assert snow_005["name"] == "DuplicateTableScanRule"
+        assert snow_005["can_auto_fix"] is False
+        assert snow_005["severity"] == "MEDIUM"
+
+        snow_006 = next(r for r in rules if r["id"] == "SNOW-006")
+        assert snow_006["name"] == "UnionToUnionAllRule"
+        assert snow_006["can_auto_fix"] is True
+        assert snow_006["severity"] == "LOW"
 
         snow_007 = next(r for r in rules if r["id"] == "SNOW-007")
+        assert snow_007["name"] == "NestedSubqueryRule"
         assert snow_007["can_auto_fix"] is True
+        assert snow_007["severity"] == "MEDIUM"
 
     def test_environment_variables_debug_only(self) -> None:
         """Verify that environment variables only expose DEBUG_ICEPICK_ prefixed vars."""

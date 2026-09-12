@@ -478,3 +478,35 @@ class TestCli:
         assert result.exit_code == 1
         assert "error: Invalid dialect 'unknown_sql'" in result.output
         assert "snowflake" in result.output
+
+    def test_check_detects_snow_004_implicit_cross_join(self, tmp_path: Path) -> None:
+        """Test that check command detects comma join (SNOW-004)."""
+        sql_file = tmp_path / "cross_join.sql"
+        sql_file.write_text("SELECT * FROM users, orders", encoding="utf-8")
+
+        result = runner.invoke(app, ["check", str(sql_file)])
+        assert result.exit_code == 1
+        assert "SNOW-004" in result.output
+
+    def test_check_detects_snow_005_duplicate_scan(self, tmp_path: Path) -> None:
+        """Test that check command detects duplicate table scans in CTEs (SNOW-005)."""
+        sql_file = tmp_path / "dup_scan.sql"
+        sql = "WITH c1 AS (SELECT * FROM tbl), c2 AS (SELECT * FROM tbl) SELECT * FROM c1 JOIN c2 ON c1.id = c2.id"
+        sql_file.write_text(sql, encoding="utf-8")
+
+        result = runner.invoke(app, ["check", str(sql_file)])
+        assert result.exit_code == 1
+        assert "SNOW-005" in result.output
+
+    def test_fix_applies_snow_006_union_to_union_all(self, tmp_path: Path) -> None:
+        """Test that fix automatically rewrites UNION to UNION ALL (SNOW-006)."""
+        sql_file = tmp_path / "union.sql"
+        sql_file.write_text("SELECT 1 UNION SELECT 2", encoding="utf-8")
+
+        result = runner.invoke(app, ["fix", str(sql_file), "--write", "--force"])
+        assert result.exit_code == 0
+        assert "Successfully updated" in result.output
+
+        content = sql_file.read_text(encoding="utf-8")
+        assert "UNION ALL" in content
+

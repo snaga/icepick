@@ -22,9 +22,14 @@ from icepick.exceptions import AuthenticationError, ParseError
 from icepick.feedback import FeedbackRecorder
 from icepick.linter.base import Severity
 from icepick.linter.engine import LinterEngine
-from icepick.linter.rules.snow_001_sargable import NonSargableRule
-from icepick.linter.rules.snow_003_sort import RedundantSortRule
-from icepick.linter.rules.snow_007_nested_subquery import NestedSubqueryRule
+from icepick.linter.rules import (
+    DuplicateTableScanRule,
+    ImplicitCrossJoinRule,
+    NestedSubqueryRule,
+    NonSargableRule,
+    RedundantSortRule,
+    UnionToUnionAllRule,
+)
 from icepick.parser import parse_snowflake_sql
 from icepick.patcher.in_place import ASTPatcher
 from icepick.patcher.subquery_to_cte import SubqueryToCTE
@@ -104,6 +109,9 @@ def _create_engine(cfg: Config) -> LinterEngine:
     engine = LinterEngine(config=cfg)
     engine.register_rule(NonSargableRule())
     engine.register_rule(RedundantSortRule())
+    engine.register_rule(ImplicitCrossJoinRule())
+    engine.register_rule(DuplicateTableScanRule())
+    engine.register_rule(UnionToUnionAllRule())
     engine.register_rule(NestedSubqueryRule())
     return engine
 
