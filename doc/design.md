@@ -64,6 +64,7 @@ class OptimizationResult:
 ## 3. コンポーネント詳細設計
 
 ### 3.1 `LinterEngine` (`icepick/linter/`)
+- 対応要件: A-1, A-2, A-3, A-4, A-5
 - `BaseRule` を継承した個別ルールクラスを動的にロードして実行する。
 - 各ルールは `check(ast: exp.Expression) -> List[DiagnosticIssue]` を実装する。
 - 個別ルール一覧:
@@ -73,6 +74,7 @@ class OptimizationResult:
   - `NestedSubqueryRule` (`SNOW-007`): `exp.From` や `exp.Join` 内の `exp.Subquery` を検出し、CTE外出し対象としてフラグ付け。
 
 ### 3.2 `ASTPatcher` & `SubqueryToCTE` (`icepick/patcher/`)
+- 対応要件: B-1, B-2
 - **In-place置換**:
   - `issue.suggested_replacement` が存在する場合: `issue.target_node.replace(issue.suggested_replacement)`
   - `suggested_replacement` が None の場合: `issue.target_node.pop()`
@@ -84,6 +86,7 @@ class OptimizationResult:
   5. 元のサブクエリノードを `exp.Table(this=cte_alias, alias=original_alias)` で置換。
 
 ### 3.3 `ContextSlicer` & `LLMClient` (`icepick/llm/`)
+- 対応要件: B-3, C-1
 - `ContextSlicer`:
   - ターゲットノード（相関サブクエリ等）と、親ノード（CTEやテーブル名）、参照されているカラムのスキーマ定義を抽出し、最小限のコンテキストMarkdownを生成。
 - `LLMClient`:
@@ -97,11 +100,13 @@ class OptimizationResult:
   - レスポンスから Markdown コードブロック（```sql ... ```）を抽出し、`sqlglot.parse_one(llm_sql, read="snowflake")` で即座に構文検証。構文OKなら新しいASTノードを返し、構文エラー時は元のASTノードを維持して安全にフォールバック。
 
 ### 3.4 `DiffFormatter` (`icepick/diff/`)
+- 対応要件: C-2, C-3
 - `difflib.unified_diff()` をラップし、入力SQLを `sqlglot` でフォーマットした基準テキストと、最適化後テキストの差分を計算。
 - インデント差異による偽陽性Diffを排除し、純粋な意味変更のみをHunkとして抽出。
 - `rich.syntax.Syntax(diff, "diff")` でターミナルカラー描画。
 
 ### 3.5 `EquivalenceVerifier` (`icepick/verifier/`)
+- 対応要件: D-1
 - 双方向 `EXCEPT` クエリを自動構築してSnowflakeで実行：
   ```sql
   WITH orig AS ( <ORIGINAL_SQL> ),
@@ -111,6 +116,72 @@ class OptimizationResult:
   SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM opt EXCEPT SELECT * FROM orig);
   ```
 - 両方の `cnt` が `0` の場合のみ `is_verified=True`。
+
+### 3.6 `FeedbackRecorder` (`icepick/feedback.py` または `cli.py`)
+- 対応要件: E-1
+- テスト中・運用中にエージェントや開発者が直面した摩擦（フリクション）、バグ、改善アイデアをローカルログファイルにアペンド記録。
+- データ構造:
+  ```python
+  @dataclass
+  class FeedbackEntry:
+      timestamp: str  # ISO 8601
+      version: str    # icepick version
+      category: str   # friction, bug, doc, idea
+      message: str    # フィードバック本文
+      cwd: str        # 実行ディレクトリ
+      git_commit: str | None = None
+  ```
+- 保存形式: `.icepick_feedback.jsonl`（JSON Lines形式、1行1レコード、UTF-8追記）。
+- `--category` のバリデーションを行い、不正値の場合は有効なenum一覧（`friction`, `bug`, `doc`, `idea`）を提示する Actionable Error を送出。
+
+### 3.7 エージェント親和性アーキテクチャ (Agent-Native CLI Interface)
+- 対応要件: E-2, E-3, E-5, E-6, E-7
+- **機械可読イントロスペクション (`icepick agent-context`)**:
+  - Layer 2 イントロスペクションとして、CLI の全コマンド、引数・オプション仕様、対応する最適化ルール一覧（`rule-001`〜`007`等）、環境変数スキーマ（`DEBUG_ICEPICK_*`）を単一の構造化 JSON として出力。
+  - エージェントが初手で実行することで、ヘルプ探索によるトークン消費を最小化する。
+- **構造化出力 (`--json`)**:
+  - `check`: 検出された Issue の JSON 配列を出力。
+  - `fix`: 変更ステータス、適用された Issue 一覧、Unified Diff テキストを JSON で出力。
+  - `feedback`: 記録された `FeedbackEntry` を JSON で出力。
+  - `agent-context`: ツール仕様メタデータを JSON で出力。
+- **非対話モードと変更境界 (`--dry-run` & `--force`)**:
+  - `sys.stdin.isatty()` により対話型ターミナルかパイプ/サブプロセスかを自動判定。
+  - 非 TTY 環境ではプロンプト表示による永久ハングを防止。
+  - `--dry-run`: ファイルへの書き込みを一切行わず、最適化後のクエリや Unified Diff のプレビューのみを出力。
+  - 非TTY環境における `--in-place` 実行時は、確認バイパスフラグ `--force`（または `--yes`）を必須とし、未指定時は安全のため処理を中止して `.patch` 出力を案内。
+- **自己修正エラー (Actionable & Enumerated Errors)**:
+  - 引数やオプションのバリデーションエラー時、可能な値の列挙（enumリスト）と、コピペして実行可能な修正コマンド例を出力。
+
+### 3.8 セキュア認証情報プロバイダ (Secure Credential Management)
+- 対応要件: E-4
+- **厳格な優先順位ピラミッド (The Strict Priority Pyramid)**:
+  1. 一時デバッグ/CI用環境変数（`DEBUG_ICEPICK_` プレフィックス必須。例: `DEBUG_ICEPICK_GEMINI_API_KEY`, `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD`）
+  2. Windows 資格情報マネージャー（Target: `icepick:gemini_api_key`, `icepick:snowflake_password`）
+  ※意図しないグローバル環境変数や他ツールの認証情報の誤読込み・混入を防ぐため、一般的な名前（`GEMINI_API_KEY` 等）は意図的に探索対象から除外する。
+- **UTF-16LE / Null Byte トラップ対策**:
+  - Windows `cmdkey` 登録時に混入する UTF-16LE（null バイト `0x00`）を自動検知し、安全にデコードして HTTP リクエストのヘッダー破壊を防ぐ。
+- **Actionable な認証エラーとセキュア登録案内**:
+  - 認証情報が取得できない場合、シェル履歴に残さない安全な登録コマンドを含む具体的な自己修正手順を提示して exit code 1 で終了：
+    ```text
+    [Authentication Error] Gemini API Key is missing.
+    To fix this, please register your key using Windows Credential Manager:
+      # Recommended (safe, masked input without leaving secrets in history):
+      $cred = Get-Credential -UserName "any" -Message "Enter Gemini API Key"
+      cmdkey /generic:icepick:gemini_api_key /user:any /pass:$($cred.GetNetworkCredential().Password)
+
+      # Direct command:
+      cmdkey /generic:icepick:gemini_api_key /user:any /pass:<your_key>
+
+    Or set the debug environment variable:
+      $env:DEBUG_ICEPICK_GEMINI_API_KEY="<your_key>"
+    ```
+
+### 3.9 エージェント準備状況テスト (Agent Readiness Test)
+- 対応要件: E-8
+- **テスト設計 (`tests/test_agent_readiness.py`)**:
+  1. **非TTYハング防止テスト**: `stdin` を `io.StringIO` やパイプ模倣オブジェクトに差し替え、プロンプト待ちでブロックせずに終了することを確認。
+  2. **構造化出力テスト**: 全サブコマンド（`check`, `fix`, `feedback`, `agent-context`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
+  3. **Actionable Error検証**: 認証未設定時および不正引数指定時に、有効な enum 一覧および復旧コマンド例が出力に含まれていることを検証。
 
 ## 4. シーケンス図（対話型リファクタリングフロー）
 

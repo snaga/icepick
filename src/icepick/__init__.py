@@ -5,9 +5,10 @@ Deterministic AST-based query optimizer and anti-pattern linter for Snowflake SQ
 
 __version__ = "0.1.0"
 
+from icepick.agent_context import get_agent_context
 from icepick.cli import app
 from icepick.config import Config, OptimizerConfig
-from icepick.exceptions import IcepickError, ParseError
+from icepick.exceptions import AuthenticationError, IcepickError, ParseError
 from icepick.linter import BaseRule, DiagnosticIssue, LinterEngine, Severity
 from icepick.llm import ContextSlicer, LLMClient, SliceContext
 from icepick.parser import SQLParser, parse_snowflake_sql
@@ -16,6 +17,7 @@ from icepick.verifier import EquivalenceVerifier, VerificationResult
 
 __all__ = [
     "ASTPatcher",
+    "AuthenticationError",
     "BaseRule",
     "Config",
     "ContextSlicer",
@@ -33,5 +35,6 @@ __all__ = [
     "VerificationResult",
     "__version__",
     "app",
+    "get_agent_context",
     "parse_snowflake_sql",
 ]

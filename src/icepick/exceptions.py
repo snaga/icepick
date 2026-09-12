@@ -54,3 +54,18 @@ class ParseError(IcepickError):
         if self.context:
             parts.append(f"\nContext:\n  {self.context}")
         return " ".join(parts)
+
+
+class AuthenticationError(IcepickError):
+    """Exception raised when credential resolution fails.
+
+    Attributes:
+        message: Actionable error message describing recovery steps.
+        key_name: The credential key that failed to resolve, if specified.
+    """
+
+    def __init__(self, message: str, key_name: str | None = None) -> None:
+        self.message = message
+        self.key_name = key_name
+        super().__init__(message)
+

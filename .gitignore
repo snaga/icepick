@@ -49,3 +49,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 .workspace_cache/
+
+# Agent Feedback Logs
+.icepick_feedback.jsonl
+*.feedback.jsonl
+

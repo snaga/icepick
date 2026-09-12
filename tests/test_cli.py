@@ -65,7 +65,9 @@ class TestCli:
     def test_check_with_json_config(self, tmp_path: Path) -> None:
         """Test check command loading a JSON config disabling SNOW-001."""
         sql_file = tmp_path / "query.sql"
-        sql_file.write_text("SELECT * FROM orders WHERE DATE(created_at) = '2023-01-01'", encoding="utf-8")
+        sql_file.write_text(
+            "SELECT * FROM orders WHERE DATE(created_at) = '2023-01-01'", encoding="utf-8"
+        )
 
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"disabled_rules": ["SNOW-001"]}), encoding="utf-8")
@@ -77,7 +79,9 @@ class TestCli:
     def test_check_with_toml_config(self, tmp_path: Path) -> None:
         """Test check command loading a TOML config."""
         sql_file = tmp_path / "query.sql"
-        sql_file.write_text("SELECT * FROM orders WHERE DATE(created_at) = '2023-01-01'", encoding="utf-8")
+        sql_file.write_text(
+            "SELECT * FROM orders WHERE DATE(created_at) = '2023-01-01'", encoding="utf-8"
+        )
 
         cfg_file = tmp_path / "config.toml"
         cfg_file.write_text('disabled_rules = ["SNOW-001"]\n', encoding="utf-8")
@@ -104,28 +108,68 @@ class TestCli:
         result = runner.invoke(app, ["fix", str(sql_file), "--diff"])
         assert result.exit_code == 0
         # ORDER BY id should be removed by SNOW-003
-        assert "-  ORDER BY" in result.output or "-    ORDER BY" in result.output or "-" in result.output
+        assert (
+            "-  ORDER BY" in result.output
+            or "-    ORDER BY" in result.output
+            or "-" in result.output
+        )
         # File should remain unchanged
         assert sql_file.read_text(encoding="utf-8") == original
 
-    def test_fix_write_option_modifies_file(self, tmp_path: Path) -> None:
-        """Test that fix --write modifies the target SQL file in-place."""
+    def test_fix_write_without_force_in_non_tty_fails(self, tmp_path: Path) -> None:
+        """Test that fix --write without --force in non-interactive environment exits 1 with actionable error."""
         sql_file = tmp_path / "fixable.sql"
         original = "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub"
         sql_file.write_text(original, encoding="utf-8")
 
         result = runner.invoke(app, ["fix", str(sql_file), "--write"])
+        assert result.exit_code == 1
+        assert (
+            "error: Overwriting files in non-interactive environment requires --force flag, or use --patch to output a patch file."
+            in result.output
+        )
+        # File must remain untouched
+        assert sql_file.read_text(encoding="utf-8") == original
+
+    def test_fix_write_with_force_modifies_file(self, tmp_path: Path) -> None:
+        """Test that fix --write with --force overwrites the target SQL file in-place."""
+        sql_file = tmp_path / "fixable.sql"
+        original = "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub"
+        sql_file.write_text(original, encoding="utf-8")
+
+        result = runner.invoke(app, ["fix", str(sql_file), "--write", "--force"])
         assert result.exit_code == 0
         assert "Successfully updated" in result.output
 
         new_content = sql_file.read_text(encoding="utf-8")
         assert "ORDER BY" not in new_content
 
+    def test_fix_dry_run_does_not_modify_file_or_patch(self, tmp_path: Path) -> None:
+        """Test that --dry-run skips modifying file and saving patch, and displays diff preview."""
+        sql_file = tmp_path / "fixable.sql"
+        original = "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub\n"
+        sql_file.write_text(original, encoding="utf-8")
+        patch_file = tmp_path / "dry_run.patch"
+
+        result = runner.invoke(
+            app,
+            ["fix", str(sql_file), "--write", "--patch", str(patch_file), "--dry-run"],
+        )
+        assert result.exit_code == 0
+        # Diff preview output
+        assert "-" in result.output or "ORDER BY" in result.output
+        # File should remain unmodified
+        assert sql_file.read_text(encoding="utf-8") == original
+        # Patch file must not be created
+        assert not patch_file.exists()
+
     def test_fix_patch_option_creates_patch_file(self, tmp_path: Path) -> None:
         """Test that fix --patch writes the diff to a specified file."""
         sql_file = tmp_path / "fixable.sql"
         patch_file = tmp_path / "changes.patch"
-        sql_file.write_text("SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub", encoding="utf-8")
+        sql_file.write_text(
+            "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub", encoding="utf-8"
+        )
 
         result = runner.invoke(app, ["fix", str(sql_file), "--patch", str(patch_file)])
         assert result.exit_code == 0
@@ -139,9 +183,13 @@ class TestCli:
     def test_fix_interactive_yes(self, tmp_path: Path) -> None:
         """Test interactive mode applying fix when user inputs 'y'."""
         sql_file = tmp_path / "fixable.sql"
-        sql_file.write_text("SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub", encoding="utf-8")
+        sql_file.write_text(
+            "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub", encoding="utf-8"
+        )
 
-        result = runner.invoke(app, ["fix", str(sql_file), "--interactive", "--write"], input="y\n")
+        result = runner.invoke(
+            app, ["fix", str(sql_file), "--interactive", "--write", "--force"], input="y\n"
+        )
         assert result.exit_code == 0
         assert "Apply fix for SNOW-003?" in result.output
         assert "Successfully updated" in result.output
@@ -153,7 +201,9 @@ class TestCli:
         original = "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub"
         sql_file.write_text(original, encoding="utf-8")
 
-        result = runner.invoke(app, ["fix", str(sql_file), "--interactive", "--write"], input="n\n")
+        result = runner.invoke(
+            app, ["fix", str(sql_file), "--interactive", "--write", "--force"], input="n\n"
+        )
         assert result.exit_code == 0
         assert "Apply fix for SNOW-003?" in result.output
         assert "No modifications needed" in result.output
@@ -165,7 +215,9 @@ class TestCli:
         original = "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub"
         sql_file.write_text(original, encoding="utf-8")
 
-        result = runner.invoke(app, ["fix", str(sql_file), "--interactive", "--write"], input="q\n")
+        result = runner.invoke(
+            app, ["fix", str(sql_file), "--interactive", "--write", "--force"], input="q\n"
+        )
         assert result.exit_code == 0
         assert "Apply fix for SNOW-003?" in result.output
         assert "No modifications needed" in result.output
@@ -176,7 +228,9 @@ class TestCli:
         sql_file = tmp_path / "nested.sql"
         sql_file.write_text("SELECT * FROM (SELECT a FROM tbl) AS sub", encoding="utf-8")
 
-        result = runner.invoke(app, ["fix", str(sql_file), "--flatten-subqueries", "--write"])
+        result = runner.invoke(
+            app, ["fix", str(sql_file), "--flatten-subqueries", "--write", "--force"]
+        )
         assert result.exit_code == 0
         new_content = sql_file.read_text(encoding="utf-8")
         assert "WITH" in new_content
@@ -189,7 +243,7 @@ class TestCli:
 
         result = runner.invoke(
             app,
-            ["fix", str(sql_file), "--interactive", "--flatten-subqueries", "--write"],
+            ["fix", str(sql_file), "--interactive", "--flatten-subqueries", "--write", "--force"],
             input="y\n",
         )
         assert result.exit_code == 0
@@ -204,7 +258,7 @@ class TestCli:
 
         result = runner.invoke(
             app,
-            ["fix", str(sql_file), "--interactive", "--flatten-subqueries", "--write"],
+            ["fix", str(sql_file), "--interactive", "--flatten-subqueries", "--write", "--force"],
             input="n\n",
         )
         assert result.exit_code == 0
@@ -238,9 +292,14 @@ class TestCli:
     def test_fix_interactive_patcher_exception_handling(self, tmp_path: Path) -> None:
         """Test that an exception during interactive patching logs a warning and skips safely."""
         sql_file = tmp_path / "fixable.sql"
-        sql_file.write_text("SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub", encoding="utf-8")
+        sql_file.write_text(
+            "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub", encoding="utf-8"
+        )
 
-        with patch("icepick.patcher.in_place.ASTPatcher.apply_issue", side_effect=ValueError("Patch failed")):
+        with patch(
+            "icepick.patcher.in_place.ASTPatcher.apply_issue",
+            side_effect=ValueError("Patch failed"),
+        ):
             result = runner.invoke(app, ["fix", str(sql_file), "--interactive"], input="y\n")
             assert result.exit_code == 0
             assert "Skipped fix for SNOW-003" in result.output
@@ -250,7 +309,10 @@ class TestCli:
         sql_file = tmp_path / "nested.sql"
         sql_file.write_text("SELECT * FROM (SELECT a FROM tbl) AS sub", encoding="utf-8")
 
-        with patch("icepick.patcher.subquery_to_cte.SubqueryToCTE.flatten_all_subqueries", side_effect=ValueError("Flatten failed")):
+        with patch(
+            "icepick.patcher.subquery_to_cte.SubqueryToCTE.flatten_all_subqueries",
+            side_effect=ValueError("Flatten failed"),
+        ):
             result = runner.invoke(
                 app,
                 ["fix", str(sql_file), "--interactive", "--flatten-subqueries"],
@@ -274,15 +336,34 @@ class TestCli:
         assert "opt_not_in_orig" in result.output
 
     def test_verify_without_dry_run_warns_credentials(self, tmp_path: Path) -> None:
-        """Test that verify without --dry-run outputs warning about credentials and exits 1."""
+        """Test that verify without --dry-run outputs actionable AuthenticationError and exits 1."""
         orig_file = tmp_path / "orig.sql"
         opt_file = tmp_path / "opt.sql"
         orig_file.write_text("SELECT 1", encoding="utf-8")
         opt_file.write_text("SELECT 1", encoding="utf-8")
 
-        result = runner.invoke(app, ["verify", str(orig_file), str(opt_file)])
-        assert result.exit_code == 1
-        assert "connection credentials" in result.output
+        with patch("icepick.cli.resolve_credential") as mock_resolve:
+            from icepick.exceptions import AuthenticationError
+            mock_resolve.side_effect = AuthenticationError(
+                "[Authentication Error] Credential for 'snowflake_password' is invalid or not provided.",
+                key_name="snowflake_password",
+            )
+            result = runner.invoke(app, ["verify", str(orig_file), str(opt_file)])
+            assert result.exit_code == 1
+            assert "Authentication Error" in result.output
+            assert "snowflake_password" in result.output
+
+    def test_verify_with_resolved_credentials(self, tmp_path: Path) -> None:
+        """Test that verify succeeds (exits 0) when snowflake credentials are successfully resolved."""
+        orig_file = tmp_path / "orig.sql"
+        opt_file = tmp_path / "opt.sql"
+        orig_file.write_text("SELECT 1", encoding="utf-8")
+        opt_file.write_text("SELECT 1", encoding="utf-8")
+
+        with patch("icepick.cli.resolve_credential", return_value=("mock_secret", "environment variable")):
+            result = runner.invoke(app, ["verify", str(orig_file), str(opt_file)])
+            assert result.exit_code == 0
+            assert "Direct Snowflake execution" in result.output
 
     def test_verify_read_error(self, tmp_path: Path) -> None:
         """Test verify error handling when reading SQL files fails."""
@@ -296,3 +377,104 @@ class TestCli:
             assert result.exit_code == 2
             assert "Error reading files" in result.output
 
+    def test_check_json_clean_sql_outputs_empty_array(self, tmp_path: Path) -> None:
+        """Test that check --json outputs an empty JSON array for clean SQL and exits 0."""
+        sql_file = tmp_path / "clean.sql"
+        sql_file.write_text("SELECT id FROM tbl", encoding="utf-8")
+
+        result = runner.invoke(app, ["check", str(sql_file), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert len(data) == 0
+
+    def test_check_json_issues_outputs_structured_array(self, tmp_path: Path) -> None:
+        """Test that check --json outputs a structured JSON array of detected issues and exits 1."""
+        sql_file = tmp_path / "issues.sql"
+        sql = "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub WHERE DATE(created_at) = '2023-01-01'"
+        sql_file.write_text(sql, encoding="utf-8")
+
+        result = runner.invoke(app, ["check", str(sql_file), "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert len(data) == 3
+
+        rule_ids = {item["rule_id"] for item in data}
+        assert "SNOW-001" in rule_ids
+        assert "SNOW-003" in rule_ids
+        assert "SNOW-007" in rule_ids
+
+        for item in data:
+            assert "rule_name" in item
+            assert "severity" in item
+            assert "line" in item
+            assert "description" in item
+
+    def test_fix_json_optimized_output(self, tmp_path: Path) -> None:
+        """Test that fix --json returns structured JSON with status 'optimized' and applied issues."""
+        sql_file = tmp_path / "fixable.sql"
+        sql_file.write_text(
+            "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub", encoding="utf-8"
+        )
+
+        result = runner.invoke(app, ["fix", str(sql_file), "--json", "--dry-run"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "optimized"
+        assert data["file"] == str(sql_file)
+        assert "SNOW-003" in data["issues_fixed"]
+        assert "ORDER BY" in data["diff"]
+        assert len(data["diff"]) > 0
+
+    def test_fix_json_unchanged_output(self, tmp_path: Path) -> None:
+        """Test that fix --json returns status 'unchanged' when no fixes are needed."""
+        sql_file = tmp_path / "clean.sql"
+        sql_file.write_text("SELECT id FROM tbl\n", encoding="utf-8")
+
+        result = runner.invoke(app, ["fix", str(sql_file), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "unchanged"
+        assert data["file"] == str(sql_file)
+        assert data["issues_fixed"] == []
+        assert data["diff"] == ""
+
+    def test_check_invalid_dialect_enum_error(self, tmp_path: Path) -> None:
+        """Test that check with invalid --dialect outputs supported dialect enum choices and exits 1."""
+        sql_file = tmp_path / "clean.sql"
+        sql_file.write_text("SELECT 1", encoding="utf-8")
+
+        result = runner.invoke(app, ["check", str(sql_file), "--dialect", "unknown_sql"])
+        assert result.exit_code == 1
+        assert "error: Invalid dialect 'unknown_sql'" in result.output
+        assert "snowflake" in result.output
+        assert "postgres" in result.output
+        assert "duckdb" in result.output
+        assert "bigquery" in result.output
+
+    def test_fix_invalid_dialect_enum_error(self, tmp_path: Path) -> None:
+        """Test that fix with invalid --dialect outputs supported dialect enum choices and exits 1."""
+        sql_file = tmp_path / "clean.sql"
+        sql_file.write_text("SELECT 1", encoding="utf-8")
+
+        result = runner.invoke(app, ["fix", str(sql_file), "--dialect", "unknown_sql"])
+        assert result.exit_code == 1
+        assert "error: Invalid dialect 'unknown_sql'" in result.output
+        assert "snowflake" in result.output
+        assert "postgres" in result.output
+        assert "duckdb" in result.output
+        assert "bigquery" in result.output
+
+    def test_verify_invalid_dialect_enum_error(self, tmp_path: Path) -> None:
+        """Test that verify with invalid --dialect outputs supported dialect enum choices and exits 1."""
+        sql_file = tmp_path / "clean.sql"
+        sql_file.write_text("SELECT 1", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["verify", str(sql_file), str(sql_file), "--dialect", "unknown_sql"],
+        )
+        assert result.exit_code == 1
+        assert "error: Invalid dialect 'unknown_sql'" in result.output
+        assert "snowflake" in result.output

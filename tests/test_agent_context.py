@@ -1,0 +1,180 @@
+"""Tests for agent_context module and icepick agent-context CLI command."""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import patch
+
+from typer.testing import CliRunner
+
+from icepick import __version__
+from icepick.agent_context import get_agent_context
+from icepick.cli import app
+
+runner = CliRunner()
+
+
+class TestAgentContextUnit:
+    """Unit tests for get_agent_context() data structure and completeness."""
+
+    def test_top_level_keys(self) -> None:
+        """Verify that get_agent_context() contains all expected top-level keys."""
+        ctx = get_agent_context()
+        required_keys = {
+            "name",
+            "version",
+            "description",
+            "commands",
+            "rules",
+            "environment_variables",
+            "credentials",
+        }
+        assert required_keys.issubset(ctx.keys())
+        assert ctx["name"] == "icepick"
+        assert ctx["version"] == __version__
+        assert "Snowflake" in ctx["description"]
+
+    def test_commands_schema(self) -> None:
+        """Verify that all core CLI commands are documented with arguments and options."""
+        ctx = get_agent_context()
+        commands = ctx["commands"]
+        expected_commands = {"check", "fix", "verify", "feedback", "agent-context"}
+        assert expected_commands.issubset(commands.keys())
+
+        for cmd_name in expected_commands:
+            cmd_info = commands[cmd_name]
+            assert "description" in cmd_info
+            assert "arguments" in cmd_info
+            assert "options" in cmd_info
+
+        # Check argument for 'check'
+        assert "file" in commands["check"]["arguments"]
+        assert commands["check"]["arguments"]["file"]["required"] is True
+
+        # Check options for 'fix'
+        fix_opts = commands["fix"]["options"]
+        assert "--diff" in fix_opts
+        assert "--write" in fix_opts
+        assert "--patch" in fix_opts
+        assert "--dry-run" in fix_opts
+        assert "--force" in fix_opts
+
+        # Check options for 'verify'
+        verify_opts = commands["verify"]["options"]
+        assert "--dry-run" in verify_opts
+
+        # Check --dialect choices
+        expected_dialects = ["snowflake", "postgres", "duckdb", "bigquery"]
+        assert commands["check"]["options"]["--dialect"]["choices"] == expected_dialects
+        assert commands["fix"]["options"]["--dialect"]["choices"] == expected_dialects
+        assert commands["verify"]["options"]["--dialect"]["choices"] == expected_dialects
+
+    def test_rules_coverage(self) -> None:
+        """Verify that all rules from SNOW-001 to SNOW-007 are cataloged."""
+        ctx = get_agent_context()
+        rules = ctx["rules"]
+        rule_ids = {r["id"] for r in rules}
+
+        expected_rule_ids = {
+            "SNOW-001",
+            "SNOW-002",
+            "SNOW-003",
+            "SNOW-004",
+            "SNOW-005",
+            "SNOW-006",
+            "SNOW-007",
+        }
+        assert expected_rule_ids.issubset(rule_ids)
+
+        for rule in rules:
+            assert "id" in rule
+            assert "name" in rule
+            assert "severity" in rule
+            assert "description" in rule
+            assert "can_auto_fix" in rule
+            assert isinstance(rule["can_auto_fix"], bool)
+
+        # Specific rule checks
+        snow_001 = next(r for r in rules if r["id"] == "SNOW-001")
+        assert snow_001["can_auto_fix"] is True
+        assert snow_001["severity"] == "HIGH"
+
+        snow_002 = next(r for r in rules if r["id"] == "SNOW-002")
+        assert snow_002["can_auto_fix"] is False
+        assert snow_002["severity"] == "CRITICAL"
+
+        snow_003 = next(r for r in rules if r["id"] == "SNOW-003")
+        assert snow_003["can_auto_fix"] is True
+
+        snow_007 = next(r for r in rules if r["id"] == "SNOW-007")
+        assert snow_007["can_auto_fix"] is True
+
+    def test_environment_variables_debug_only(self) -> None:
+        """Verify that environment variables only expose DEBUG_ICEPICK_ prefixed vars."""
+        ctx = get_agent_context()
+        env_vars = ctx["environment_variables"]
+
+        assert "DEBUG_ICEPICK_GEMINI_API_KEY" in env_vars
+        assert "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD" in env_vars
+
+        # Ensure no generic/broad environment variables are included
+        for var_name in env_vars:
+            assert var_name.startswith("DEBUG_ICEPICK_")
+
+    def test_credentials_schema(self) -> None:
+        """Verify credential targets and command examples."""
+        ctx = get_agent_context()
+        creds = ctx["credentials"]
+
+        assert "icepick:gemini_api_key" in creds
+        assert "icepick:snowflake_password" in creds
+        for cred_target, cred_info in creds.items():
+            assert cred_target.startswith("icepick:")
+            assert "description" in cred_info
+            assert "cmdkey_example" in cred_info
+
+
+class TestAgentContextCli:
+    """CLI tests for icepick agent-context command."""
+
+    def test_agent_context_default_json_output(self) -> None:
+        """Verify agent-context exits with 0 and outputs valid JSON by default."""
+        result = runner.invoke(app, ["agent-context"])
+        assert result.exit_code == 0
+
+        parsed = json.loads(result.output)
+        assert parsed["name"] == "icepick"
+        assert parsed["version"] == __version__
+        assert "commands" in parsed
+        assert "rules" in parsed
+        assert "environment_variables" in parsed
+        assert "credentials" in parsed
+
+    def test_agent_context_with_json_flag(self) -> None:
+        """Verify agent-context --json exits with 0 and outputs valid JSON."""
+        result = runner.invoke(app, ["agent-context", "--json"])
+        assert result.exit_code == 0
+
+        parsed = json.loads(result.output)
+        assert parsed["name"] == "icepick"
+        assert len(parsed["rules"]) >= 7
+
+    def test_agent_context_no_json(self) -> None:
+        """Verify agent-context --no-json exits with 0 and prints human-readable summary."""
+        result = runner.invoke(app, ["agent-context", "--no-json"])
+        assert result.exit_code == 0
+        assert "icepick" in result.output
+        assert "Snowflake" in result.output
+
+
+class TestFeedbackCliErrorHandling:
+    """Tests for actionable error handling in feedback command."""
+
+    def test_feedback_oserror_displays_actionable_error(self) -> None:
+        """Verify OSError during feedback recording prints actionable error and exits 1."""
+        with patch("icepick.cli.FeedbackRecorder.record", side_effect=OSError("Permission denied")):
+            result = runner.invoke(app, ["feedback", "Encountered slow query execution"])
+            assert result.exit_code == 1
+            assert "File Error:" in result.output
+            assert "Actionable Advice:" in result.output
+            assert "--log-file" in result.output
