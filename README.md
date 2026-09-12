@@ -308,7 +308,61 @@ export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="your_password"
 
 環境変数または設定ファイル（JSON / TOML）により、デフォルト動作をカスタマイズできます。
 
-### 設定項目・環境変数一覧
+### 📄 設定ファイル (`icepick.json`) の作り方
+
+プロジェクト直下に `icepick.json` を配置することで、チーム全体で共通のルールや動作オプションをコード管理できます。
+
+#### 基本サンプル (`icepick.json`)
+```json
+{
+  "dialect": "snowflake",
+  "enabled_rules": [],
+  "disabled_rules": ["SNOW-007"],
+  "interactive": false,
+  "show_diff": true,
+  "write_in_place": false,
+  "output_patch": "patches/optimizer.patch",
+  "llm_enabled": true,
+  "llm_provider": "gemini",
+  "llm_model": "gemini-2.5-flash"
+}
+```
+
+> [!CAUTION]
+> **API キーやパスワードなどの機密情報を JSON ファイルに書かないでください！**  
+> `icepick.json` や `.env` に API キーを平文で記述すると、GitHub への誤コミットや情報漏洩の原因になります。  
+> 認証情報は必ず前述の [セキュアな認証設定](#-セキュアな認証設定-authentication) に従って **Windows 資格情報マネージャー (WCM)** に登録してください。Icepick は実行時に自動で WCM から安全に認証情報を解決します。
+
+#### 設定キー一覧
+| キー名 | 型 | デフォルト値 | 説明 |
+| :--- | :---: | :---: | :--- |
+| `dialect` | `string` | `"snowflake"` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) |
+| `enabled_rules` | `array[string]` | `[]` | 実行するルールIDのホワイトリスト。空の場合は無効化されていない全ルールを実行。 |
+| `disabled_rules` | `array[string]` | `[]` | スキップするルールIDのブラックリスト（例: `["SNOW-007"]`）。 |
+| `interactive` | `boolean` | `false` | `fix` コマンドで変更箇所（Hunk）ごとに承認プロンプトを出すか。 |
+| `show_diff` | `boolean` | `true` | ターミナル上にカラー Unified Diff を出力するか。 |
+| `write_in_place` | `boolean` | `false` | 元の SQL ファイルを直接上書き保存するか。 |
+| `output_patch` | `string \| null` | `null` | 生成された差分を保存する `.patch` ファイルのパス。 |
+| `llm_enabled` | `boolean` | `false` | 局所 LLM リライト機能を有効化するか。 |
+| `llm_provider` | `string` | `"gemini"` | LLM サービスプロバイダ (`"gemini"` または `"vertex"`)。 |
+| `llm_model` | `string` | `"gemini-2.5-flash"` | 使用する LLM モデル名。 |
+| `gcp_project` | `string \| null` | `null` | Vertex AI 利用時の Google Cloud プロジェクト ID。 |
+| `gcp_location` | `string \| null` | `"us-central1"` | Vertex AI 利用時の Google Cloud リージョン。 |
+
+#### 設定ファイルを指定して CLI を実行する
+`--config`（または `-c`）オプションで設定ファイルを指定して実行します。
+```bash
+# 診断時
+icepick check models/batch_mart.sql --config icepick.json
+
+# 最適化時
+icepick fix models/batch_mart.sql -c icepick.json --dry-run
+```
+
+---
+
+### 環境変数による上書き
+設定ファイルを使わない場合や、CI 環境で一時的に上書きしたい場合は環境変数も利用可能です。
 | 設定項目 / 環境変数 | 説明 | 格納先 / デフォルト値 |
 | :--- | :--- | :--- |
 | `icepick:gemini_api_key` | Google AI Studio の API キー | **Windows 資格情報マネージャー** (推奨) |
