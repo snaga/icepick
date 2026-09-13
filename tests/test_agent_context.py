@@ -45,6 +45,7 @@ class TestAgentContextUnit:
             "verify",
             "feedback",
             "agent-context",
+            "config",
         }
         assert expected_commands.issubset(commands.keys())
         assert "fix" not in commands
@@ -67,6 +68,17 @@ class TestAgentContextUnit:
         assert rewrite_opts["--agentic"]["type"] == "bool"
         assert "--flatten-subqueries" in rewrite_opts
         assert "--json" in rewrite_opts
+        assert "--provider" in rewrite_opts
+        assert rewrite_opts["--provider"]["choices"] == ["gemini", "vertex"]
+        assert "--model" in rewrite_opts
+
+        # Check 'config' command and subcommands
+        config_cmd = commands["config"]
+        assert "subcommands" in config_cmd
+        assert "show" in config_cmd["subcommands"]
+        show_sub = config_cmd["subcommands"]["show"]
+        assert "--config" in show_sub["options"]
+        assert "--json" in show_sub["options"]
 
         # Check options for 'patch'
         patch_opts = commands["patch"]["options"]

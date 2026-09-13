@@ -113,6 +113,19 @@ def get_agent_context() -> dict[str, Any]:
                         "default": None,
                         "description": "Path to configuration file (.json or .toml).",
                     },
+                    "--provider": {
+                        "flag": "-p",
+                        "type": "str",
+                        "default": None,
+                        "choices": ["gemini", "vertex"],
+                        "description": "LLM provider ('gemini' or 'vertex').",
+                    },
+                    "--model": {
+                        "flag": "-m",
+                        "type": "str",
+                        "default": None,
+                        "description": "LLM model identifier (e.g. 'gemini-3.8-flash').",
+                    },
                 },
             },
             "patch": {
@@ -237,6 +250,30 @@ def get_agent_context() -> dict[str, Any]:
                         "type": "bool",
                         "default": True,
                         "description": "Output introspected CLI specification in formatted JSON.",
+                    }
+                },
+            },
+            "config": {
+                "description": "Manage and inspect Icepick configuration.",
+                "arguments": {},
+                "options": {},
+                "subcommands": {
+                    "show": {
+                        "description": "Display currently resolved configuration settings and their source layers.",
+                        "arguments": {},
+                        "options": {
+                            "--config": {
+                                "flag": "-c",
+                                "type": "Path",
+                                "default": None,
+                                "description": "Path to configuration file (.json or .toml).",
+                            },
+                            "--json": {
+                                "type": "bool",
+                                "default": False,
+                                "description": "Output active configuration as structured JSON.",
+                            },
+                        },
                     }
                 },
             },

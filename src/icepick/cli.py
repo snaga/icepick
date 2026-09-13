@@ -9,15 +9,17 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
 from icepick import __version__
 from icepick.agent_context import get_agent_context
-from icepick.config import Config
+from icepick.config import Config, ConfigResolver, RuntimeConfigSummary
 from icepick.diff import apply_unified_diff, format_diff, render_diff, split_hunks
 from icepick.exceptions import AuthenticationError, ParseError
 from icepick.feedback import FeedbackRecorder
@@ -110,18 +112,54 @@ def main(
     """Icepick: SQL optimizer and linter for Snowflake."""
 
 
-def _load_config(config_path: Path | None) -> Config:
-    """Load Config from file or fallback to environment variables."""
-    if config_path is not None:
-        content = config_path.read_text(encoding="utf-8")
-        try:
-            data = json.loads(content)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            import tomllib  # type: ignore[import-not-found]
+def _load_config(
+    config_path: Path | None = None,
+    cli_args: dict[str, Any] | None = None,
+) -> tuple[Config, RuntimeConfigSummary]:
+    """Load and resolve Config cascading across CLI, Env, File, Keyring, and Defaults."""
+    resolver = ConfigResolver(
+        cli_args=cli_args,
+        config_file=config_path,
+    )
+    return resolver.resolve()
 
-            data = tomllib.loads(content)
-        return Config.from_dict(data)
-    return Config.from_env()
+
+def _render_active_config_banner(summary: RuntimeConfigSummary, cfg: Config) -> None:
+    """Render runtime configuration feedback banner for LLM / agentic runs."""
+    provider_item = summary.get_item("llm_provider")
+    model_item = summary.get_item("llm_model")
+    project_item = summary.get_item("gcp_project")
+    location_item = summary.get_item("gcp_location")
+    gemini_key_item = summary.get_item("gemini_api_key")
+
+    provider_src = provider_item.source.value if provider_item else "default"
+    model_src = model_item.source.value if model_item else "default"
+
+    lines = [
+        "[bold cyan]Active LLM Configuration:[/bold cyan]",
+        f"  Provider: {cfg.llm_provider} (Source: {provider_src})",
+        f"  Model:    {cfg.llm_model} (Source: {model_src})",
+    ]
+
+    if cfg.llm_provider == "vertex":
+        proj_src = project_item.source.value if project_item else "default"
+        loc_src = location_item.source.value if location_item else "default"
+        proj_val = cfg.gcp_project or "(not set)"
+        loc_val = cfg.gcp_location or "us-central1 (default)"
+        lines.append(f"  Project:  {proj_val} (Source: {proj_src})")
+        lines.append(f"  Location: {loc_val} (Source: {loc_src})")
+        lines.append("  Auth:     Google ADC / Subprocess Token")
+    else:
+        key_src = gemini_key_item.source.value if gemini_key_item else "default"
+        key_val = (
+            gemini_key_item.display_value()
+            if gemini_key_item and gemini_key_item.value
+            else "(not set)"
+        )
+        lines.append(f"  API Key:  {key_val} (Source: {key_src})")
+
+    content = "\n".join(lines)
+    console.print(Panel(content, title="Active LLM Configuration", border_style="cyan"))
 
 
 def _create_engine(cfg: Config) -> LinterEngine:
@@ -187,7 +225,11 @@ def check(
             err_console.print(f"[yellow]Location:{line_info}[/yellow]")
         raise typer.Exit(code=2) from exc
 
-    cfg = _load_config(config)
+    try:
+        cfg, _ = _load_config(config, cli_args={"dialect": dialect})
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
     engine = _create_engine(cfg)
     issues = engine.diagnose(ast)
 
@@ -290,6 +332,18 @@ def rewrite(
         readable=True,
         help="Path to configuration file (.json or .toml).",
     ),
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        "-p",
+        help="LLM provider ('gemini' or 'vertex').",
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="LLM model identifier (e.g. 'gemini-3.8-flash').",
+    ),
 ) -> None:
     """Optimize Snowflake SQL queries and output Unified Diff (read-only)."""
     dialect = _validate_dialect(dialect)
@@ -326,7 +380,20 @@ def rewrite(
             err_console.print(f"[yellow]Location:{line_info}[/yellow]")
         raise typer.Exit(code=2) from exc
 
-    cfg = _load_config(config)
+    cli_args: dict[str, Any] = {"dialect": dialect}
+    if provider is not None:
+        cli_args["llm_provider"] = provider
+    if model is not None:
+        cli_args["llm_model"] = model
+
+    try:
+        cfg, runtime_summary = _load_config(config, cli_args=cli_args)
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if (agentic or verify_loop) and not json_output:
+        _render_active_config_banner(runtime_summary, cfg)
     engine = _create_engine(cfg)
     issues = engine.diagnose(ast)
     auto_fixable_issues = [i for i in issues if i.can_auto_fix and i.rule_id != "SNOW-007"]
@@ -440,6 +507,7 @@ def rewrite(
                 "issues_count": 0,
                 "diff": "",
                 "issues": [],
+                "runtime_config": runtime_summary.to_dict(mask=True),
             }
             typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
@@ -466,6 +534,7 @@ def rewrite(
             "issues_count": len(applied_issues),
             "diff": diff_text,
             "issues": [i.to_dict() for i in applied_issues],
+            "runtime_config": runtime_summary.to_dict(mask=True),
         }
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
@@ -676,7 +745,11 @@ def verify(
         err_console.print(f"[bold red]Error reading files:[/bold red] {exc}")
         raise typer.Exit(code=2) from exc
 
-    cfg = _load_config(config)
+    try:
+        cfg, _ = _load_config(config, cli_args={"dialect": dialect})
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
 
     verifier = EquivalenceVerifier(dialect=dialect)
     verification_sql = verifier.build_verification_query(orig_sql, opt_sql, dialect=dialect)
@@ -811,3 +884,59 @@ def agent_context(
         console.print(f"[bold cyan]{ctx['name']}[/bold cyan] v{ctx['version']}")
         console.print(f"{ctx['description']}")
     raise typer.Exit(code=0)
+
+
+config_app = typer.Typer(
+    name="config",
+    help="Manage and inspect Icepick configuration.",
+    no_args_is_help=True,
+)
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("show")
+def config_show(
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to configuration file (.json or .toml).",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Output active configuration as structured JSON.",
+    ),
+) -> None:
+    """Display currently resolved configuration settings and their provenance."""
+    resolver = ConfigResolver(config_file=config)
+    try:
+        _cfg, runtime_summary = resolver.resolve()
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        typer.echo(json.dumps(runtime_summary.to_dict(mask=True), indent=2))
+        raise typer.Exit(code=0)
+
+    table = Table(
+        title="Icepick Resolved Configuration",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Option", style="bold")
+    table.add_column("Resolved Value")
+    table.add_column("Source", style="green")
+    table.add_column("Secret?", justify="center")
+
+    for key, item in sorted(runtime_summary.items.items()):
+        is_sec = "[yellow]Yes[/yellow]" if item.is_secret else "No"
+        val = item.display_value()
+        if val == "":
+            val = "[dim](none)[/dim]"
+        table.add_row(key, val, item.source.value, is_sec)
+
+    console.print(table)
+    raise typer.Exit(code=0)
+

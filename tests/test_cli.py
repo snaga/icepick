@@ -1013,3 +1013,139 @@ class TestCli:
         assert data["dry_run"] is True
         assert "EXCEPT" in data["verification_sql"]
 
+    def test_rewrite_provider_and_model_options(self, tmp_path: Path) -> None:
+        """Test rewrite with --provider and --model options passes them to config and shows feedback banner."""
+        sql_file = tmp_path / "correlated.sql"
+        original_sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.provider = "vertex"
+        mock_client.project = "test-project"
+        mock_client._auth_error = None
+        mock_client._get_vertex_token = MagicMock()
+        replacement = sqlglot.parse_one("c.cust_id IN (SELECT o.cust_id FROM orders AS o)")
+        mock_client.rewrite_fragment.return_value = replacement
+
+        with patch("icepick.cli.LLMClient", return_value=mock_client) as mock_llm_cls:
+            result = runner.invoke(
+                app,
+                [
+                    "rewrite",
+                    str(sql_file),
+                    "--agentic",
+                    "--provider",
+                    "vertex",
+                    "--model",
+                    "gemini-1.5-pro",
+                ],
+                env={"GCP_PROJECT": "test-project"},
+            )
+            assert result.exit_code == 0
+            # Verify LLMClient received the resolved config
+            call_kwargs = mock_llm_cls.call_args.kwargs
+            resolved_cfg = call_kwargs.get("config")
+            assert resolved_cfg is not None
+            assert resolved_cfg.llm_provider == "vertex"
+            assert resolved_cfg.llm_model == "gemini-1.5-pro"
+
+            # Verify feedback banner is printed
+            assert "Active LLM Configuration" in result.output
+            assert "Provider: vertex" in result.output
+            assert "Model:    gemini-1.5-pro" in result.output
+            assert "(Source: cli)" in result.output
+
+    def test_rewrite_json_contains_runtime_config(self, tmp_path: Path) -> None:
+        """Test that rewrite --json output contains runtime_config with resolved options and sources."""
+        sql_file = tmp_path / "query.sql"
+        # Triggers SNOW-001 rewrite
+        sql_file.write_text(
+            "SELECT * FROM orders WHERE DATE(created_at) = '2023-01-01'",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "rewrite",
+                str(sql_file),
+                "--provider",
+                "vertex",
+                "--model",
+                "gemini-2.5-flash",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "runtime_config" in data
+        rt = data["runtime_config"]
+        assert "llm_provider" in rt
+        assert rt["llm_provider"]["value"] == "vertex"
+        assert rt["llm_provider"]["source"] == "cli"
+        assert "llm_model" in rt
+        assert rt["llm_model"]["value"] == "gemini-2.5-flash"
+        assert rt["llm_model"]["source"] == "cli"
+
+        # Also test on clean query (has_changes: False)
+        clean_file = tmp_path / "clean.sql"
+        clean_file.write_text("SELECT id FROM tbl", encoding="utf-8")
+        res_clean = runner.invoke(app, ["rewrite", str(clean_file), "--json"])
+        assert res_clean.exit_code == 0
+        clean_data = json.loads(res_clean.output)
+        assert "runtime_config" in clean_data
+        assert clean_data["runtime_config"]["llm_provider"]["value"] == "gemini"
+        assert clean_data["runtime_config"]["llm_provider"]["source"] == "default"
+
+    def test_rewrite_invalid_provider_fails(self, tmp_path: Path) -> None:
+        """Test that passing an invalid provider to rewrite exits with 1 and configuration error."""
+        sql_file = tmp_path / "dummy.sql"
+        sql_file.write_text("SELECT 1", encoding="utf-8")
+
+        result = runner.invoke(app, ["rewrite", str(sql_file), "--provider", "unsupported_llm"])
+        assert result.exit_code == 1
+        assert "Configuration Error:" in (result.output + result.stderr)
+        assert "unsupported_llm" in (result.output + result.stderr)
+
+    def test_config_show_table(self) -> None:
+        """Test icepick config show displays configuration table with options, sources, and secrets."""
+        result = runner.invoke(app, ["config", "show"])
+        assert result.exit_code == 0
+        assert "Icepick Resolved Configuration" in result.output
+        assert "Option" in result.output
+        assert "Resolved Value" in result.output
+        assert "Source" in result.output
+        assert "Secret?" in result.output
+        assert "llm_provider" in result.output
+        assert "llm_model" in result.output
+        assert "default" in result.output
+
+    def test_config_show_json(self) -> None:
+        """Test icepick config show --json returns structured JSON dictionary with provenance."""
+        result = runner.invoke(app, ["config", "show", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, dict)
+        assert "llm_provider" in data
+        assert "value" in data["llm_provider"]
+        assert "source" in data["llm_provider"]
+        assert "snowflake_password" in data
+        assert data["snowflake_password"]["value"] is None or "..." in str(data["snowflake_password"]["value"])
+
+        # Test with a masked secret environment variable
+        result_secret = runner.invoke(
+            app,
+            ["config", "show", "--json"],
+            env={"GEMINI_API_KEY": "AIzaSySecretKeyExample1234567"},
+        )
+        assert result_secret.exit_code == 0
+        data_secret = json.loads(result_secret.output)
+        gemini_item = data_secret["gemini_api_key"]
+        assert "..." in gemini_item["value"]
+        assert "AIzaSySecretKeyExample1234567" not in gemini_item["value"]
+        assert gemini_item["source"] == "env"
+
+
