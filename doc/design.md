@@ -20,15 +20,18 @@ flowchart TD
     Rules --> Issues["List[DiagnosticIssue]"]
 
     CmdRewrite --> Linter
-    CmdRewrite --> Patcher["icepick.patcher.ASTPatcher"]
-    Patcher -->|Rule-based| InPlace["In-place Node Replacement"]
-    Patcher -->|LLM-based| Slicer["icepick.llm.ContextSlicer"]
-    Slicer --> LLMClient["icepick.llm.LLMClient"]
+    CmdRewrite --> Splicer["icepick.patcher.TextSplicer (Source-Preserving)"]
+    Splicer -->|Targeted Splicing| RawOpt["Modified Raw SQL Buffer"]
+    CmdRewrite -->|Full AST fallback / --reformat| Patcher["icepick.patcher.ASTPatcher"]
+    Patcher --> InPlace["In-place AST Node Replacement"]
+    Patcher -->|LLM-based| ContextSlicer["icepick.llm.ContextSlicer"]
+    ContextSlicer --> LLMClient["icepick.llm.LLMClient"]
     LLMClient --> InPlace
     Patcher -->|Subquery to CTE| CTEExt["icepick.patcher.SubqueryToCTE"]
     CTEExt --> InPlace
-    InPlace --> Diff["icepick.diff.DiffFormatter"]
-    Diff --> Stdout["stdout / .patch"]
+    RawOpt --> Diff["icepick.diff.DiffFormatter"]
+    InPlace -.->|Full AST Diff| Diff
+    Diff --> Stdout["stdout / .patch (Clean Minimal Diff)"]
 
     Stdout -.->|stdin / pipe| CmdPatch
     CmdPatch --> TargetFile["Target SQL File (In-place Mutation)"]
@@ -142,11 +145,26 @@ class OptimizationResult:
       - 取得した OAuth2 Bearer トークンを `Authorization: Bearer {token}` に付与。
   - レスポンスから Markdown コードブロック（```sql ... ```）を抽出し、`sqlglot.parse_one(llm_sql, read="snowflake")` で即座に構文検証。構文OKなら新しいASTノードを返し、構文エラー時は元のASTノードを維持して安全にフォールバック。
 
-### 3.4 `DiffFormatter` (`icepick/diff/`)
-- 対応要件: C-2, C-3
-- `difflib.unified_diff()` をラップし、入力SQLを `sqlglot` でフォーマットした基準テキストと、最適化後テキストの差分を計算。
-- インデント差異による偽陽性Diffを排除し、純粋な意味変更のみをHunkとして抽出。
-- `rich.syntax.Syntax(diff, "diff")` でターミナルカラー描画。
+### 3.4 `DiffFormatter` & `TextSplicer` (`icepick/diff/`, `icepick/patcher/`)
+- 対応要件: C-1, C-2, C-3, C-5
+- **元ソース書式保持型局所置換 (`TextSplicer`)**:
+  - **IPO 記述**:
+    - **Input**:
+      - `original_sql`: 元の生の SQL テキスト（ユーザー独自のインデント、コメント、改行、大文字小文字を保持）
+      - `issues`: 診断された `DiagnosticIssue` のリスト（患部ノード `target_node`, 置換ノード `suggested_replacement` または LLM 置換ノード, `line_number`）
+      - `dialect`: SQL 方言（デフォルト: `"snowflake"`）
+    - **Processing**:
+      1. 各 Issue の `target_node` の SQL 表現および行位置情報から、`original_sql` 内の対応する生テキスト断片（行・文字範囲）を特定。
+      2. 元の行のインデント（先行空白・タブ）を検出し、置換先コード（`suggested_replacement.sql(...)` または LLM 生成コード）のインデントを元のコンテキストに合わせて整形。
+      3. 患部以外の 95% 以上のテキスト（コメント、空行、インデント、キーワードの大文字小文字）を 1 文字も改変することなく、患部のみをピンポイント差し替えした一時バッファ `modified_raw_sql` を構築。
+      4. `format_diff(original_sql, modified_raw_sql, normalize=False)` を実行し、元の生ファイルに対する完全一致 Unified Diff を生成。
+    - **Output**:
+      - `modified_raw_sql`: 患部のみが置換され、元コードの書式が 100% 維持された SQL 文字列
+      - `diff_text`: 元ファイルにそのまま適用可能な、コンテキスト行が完全一致する最小限の Unified Diff
+- **パッチ適用エンジン (`apply_unified_diff`) のインデント非依存マッチング**:
+  - 外部で作成されたパッチや微細なインデント差が存在する場合でも確実に適用できるよう、`_find_matching_position` に `line.strip()` 一致およびインデント自動再調整（Indent Re-targeting）の二重安全フォールバックを実装。
+- **全体再フォーマットフォールバック (`--reformat`)**:
+  - インラインサブクエリの CTE 平坦化（`--flatten-subqueries`）など、クエリ全体の構文木組み換えを伴う操作や明示的な再フォーマット指示時は、AST 全体シリアライズによる Diff 生成（`normalize=True`）を許可。
 
 ### 3.5 `EquivalenceVerifier` (`icepick/verifier/`)
 - 対応要件: D-1
