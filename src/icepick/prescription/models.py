@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from icepick.linter.base import Severity
+from icepick.linter.base import DiagnosticIssue, Severity
 
 
 class PrescriptionAction(str, Enum):
@@ -83,6 +83,7 @@ class Prescription:
         suggested_sql: Recommended replacement SQL snippet (None for DELETE action).
         rationale: Explanation of why this modification is required (Why).
         expected_impact: Expected performance or resource impact (e.g., pruning, spill reduction).
+        _issue: Optional reference to the underlying DiagnosticIssue (AST context) for splicing.
     """
 
     id: str
@@ -94,6 +95,7 @@ class Prescription:
     suggested_sql: str | None = None
     rationale: str = ""
     expected_impact: str = ""
+    _issue: DiagnosticIssue | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert prescription to a JSON-serializable dictionary.

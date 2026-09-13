@@ -6,10 +6,13 @@ structured, actionable PrescriptionPlan objects according to ADR-0005.
 
 from __future__ import annotations
 
+import logging
+
 import sqlglot
 from sqlglot import exp
 
 from icepick.config import Config
+from icepick.diff.formatter import format_diff
 from icepick.linter.base import DiagnosticIssue, Severity
 from icepick.linter.engine import LinterEngine
 from icepick.linter.rules.snow_001_sargable import NonSargableRule
@@ -19,12 +22,15 @@ from icepick.linter.rules.snow_004_implicit_cross_join import ImplicitCrossJoinR
 from icepick.linter.rules.snow_005_duplicate_scan import DuplicateTableScanRule
 from icepick.linter.rules.snow_006_union import UnionToUnionAllRule
 from icepick.linter.rules.snow_007_nested_subquery import NestedSubqueryRule
+from icepick.patcher.splicer import TextSplicer
 from icepick.prescription.models import (
     Prescription,
     PrescriptionAction,
     PrescriptionPlan,
     PrescriptionTarget,
 )
+
+logger = logging.getLogger(__name__)
 
 # Rule ID to expected performance impact explanation mapping
 RULE_IMPACT_MAP: dict[str, str] = {
@@ -170,6 +176,7 @@ class PrescriptionEngine:
                     suggested_sql=suggested_sql,
                     rationale=issue.description,
                     expected_impact=expected_impact,
+                    _issue=issue,
                 )
             )
 
@@ -179,3 +186,109 @@ class PrescriptionEngine:
             issues_count=len(prescriptions),
             prescriptions=prescriptions,
         )
+
+    def generate_diff(
+        self,
+        sql_text: str,
+        plan: PrescriptionPlan | None = None,
+        selected_ids: list[str] | None = None,
+        filename: str = "query.sql",
+    ) -> str:
+        """Generate a minimal Unified Diff applying selected (or all) prescriptions.
+
+        Uses targeted text splicing (TextSplicer) to surgically modify only the code
+        prescribed by selected_ids, strictly preserving all formatting, comments,
+        and untouched parts of the raw SQL text.
+
+        Args:
+            sql_text: Original raw SQL query text.
+            plan: Pre-diagnosed PrescriptionPlan. If None, diagnose() is invoked automatically.
+            selected_ids: Optional list of prescription IDs to apply (e.g. ['RX-001', 'RX-003']).
+                If None, all diagnosed prescriptions are applied.
+            filename: Target filename label used in Unified Diff headers (default: 'query.sql').
+
+        Returns:
+            str: Standard Unified Diff string representing surgical modifications,
+                or an empty string if there are no changes or no matching prescriptions.
+
+        Raises:
+            ValueError: If selected_ids contains invalid prescription ID(s) not present in plan.
+        """
+        # 1. Resolve diagnostic plan
+        if plan is None:
+            plan = self.diagnose(sql_text, file_path=filename)
+
+        valid_ids = [rx.id for rx in plan.prescriptions]
+        target_rxs: list[Prescription]
+
+        # 2. Validate selected_ids and filter target prescriptions
+        if selected_ids is not None:
+            unknown_ids = list(dict.fromkeys(rid for rid in selected_ids if rid not in valid_ids))
+            if unknown_ids:
+                avail_str = ", ".join(valid_ids) if valid_ids else "(none)"
+                raise ValueError(
+                    f"Invalid prescription ID(s): {', '.join(unknown_ids)}. Available IDs: {avail_str}"
+                )
+
+            selected_set = set(selected_ids)
+            target_rxs = [rx for rx in plan.prescriptions if rx.id in selected_set]
+        else:
+            target_rxs = plan.prescriptions
+
+        if not target_rxs:
+            return ""
+
+        # 3. Collect DiagnosticIssue objects (with fallback if deserialized without AST reference)
+        splicer = TextSplicer(dialect=self.dialect)
+        issues_to_apply: list[DiagnosticIssue] = []
+
+        for rx in target_rxs:
+            if rx._issue is not None:
+                issues_to_apply.append(rx._issue)
+            else:
+                # Fallback reconstruction when Prescription was deserialized from JSON
+                target_node: exp.Expression
+                try:
+                    parsed_node = sqlglot.parse_one(rx.original_sql, dialect=self.dialect)
+                    target_node = (
+                        parsed_node
+                        if isinstance(parsed_node, exp.Expression)
+                        else exp.var(rx.original_sql)
+                    )
+                except (sqlglot.errors.ParseError, sqlglot.errors.SqlglotError, ValueError) as err:
+                    logger.debug(
+                        "Failed to parse fallback original_sql '%s': %s", rx.original_sql, err
+                    )
+                    target_node = exp.var(rx.original_sql)
+
+                suggested_rep: exp.Expression | None = None
+                if rx.suggested_sql is not None:
+                    try:
+                        parsed_rep = sqlglot.parse_one(rx.suggested_sql, dialect=self.dialect)
+                        if isinstance(parsed_rep, exp.Expression):
+                            suggested_rep = parsed_rep
+                    except (sqlglot.errors.ParseError, sqlglot.errors.SqlglotError, ValueError) as err:
+                        logger.debug(
+                            "Failed to parse fallback suggested_sql '%s': %s", rx.suggested_sql, err
+                        )
+
+                line_num = rx.target.line_range[0] if rx.target.line_range else None
+                issues_to_apply.append(
+                    DiagnosticIssue(
+                        rule_id=rx.rule_id,
+                        rule_name=rx.rule_id,
+                        severity=rx.severity,
+                        description=rx.rationale,
+                        target_node=target_node,
+                        snippet=rx.original_sql,
+                        line_number=line_num,
+                        suggested_replacement=suggested_rep,
+                        requires_llm=(
+                            rx.suggested_sql is None and rx.action != PrescriptionAction.DELETE
+                        ),
+                    )
+                )
+
+        # 4. Perform surgical text splicing and produce minimal Unified Diff
+        modified_sql, _ = splicer.splice_all(sql_text, issues_to_apply)
+        return format_diff(sql_text, modified_sql, filename=filename, normalize=False)
