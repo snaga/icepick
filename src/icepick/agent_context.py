@@ -260,26 +260,9 @@ def get_agent_context() -> dict[str, Any]:
                         },
                     },
                     "test": {
-                        "description": "Test connectivity and authentication for LLM (Gemini/Vertex) and Snowflake.",
+                        "description": "Test connectivity and authentication for LLM services (Gemini/Vertex).",
                         "arguments": {},
                         "options": {
-                            "--target": {
-                                "flag": "-t",
-                                "type": "str",
-                                "default": "all",
-                                "choices": ["all", "llm", "snowflake"],
-                                "description": "Target service to test ('all', 'llm', 'snowflake'). Default: 'all'.",
-                            },
-                            "--llm": {
-                                "type": "bool",
-                                "default": False,
-                                "description": "Test LLM connection only.",
-                            },
-                            "--snowflake": {
-                                "type": "bool",
-                                "default": False,
-                                "description": "Test Snowflake connection only.",
-                            },
                             "--provider": {
                                 "flag": "-p",
                                 "type": "str",
@@ -296,7 +279,7 @@ def get_agent_context() -> dict[str, Any]:
                             "--timeout": {
                                 "type": "float",
                                 "default": 10.0,
-                                "description": "Timeout in seconds for each connection check (default: 10.0).",
+                                "description": "Timeout in seconds for connection check (default: 10.0).",
                             },
                             "--config": {
                                 "flag": "-c",
@@ -371,38 +354,11 @@ def get_agent_context() -> dict[str, Any]:
                 "credential_target": "icepick:gemini_api_key",
                 "required": False,
             },
-            "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD": {
-                "description": "Temporary debug/CI override for Snowflake connection password.",
-                "credential_target": "icepick:snowflake_password",
-                "required": False,
-            },
-            "DEBUG_ICEPICK_SNOWFLAKE_ACCOUNT": {
-                "description": "Temporary debug/CI override for Snowflake account identifier.",
-                "credential_target": "icepick:snowflake_account",
-                "required": False,
-            },
-            "DEBUG_ICEPICK_SNOWFLAKE_USER": {
-                "description": "Temporary debug/CI override for Snowflake user name.",
-                "credential_target": "icepick:snowflake_user",
-                "required": False,
-            },
         },
         "credentials": {
             "icepick:gemini_api_key": {
                 "description": "Windows Credential Manager target for Google Gemini LLM API key.",
                 "cmdkey_example": "cmdkey /generic:icepick:gemini_api_key /user:icepick /pass:<API_KEY>",
-            },
-            "icepick:snowflake_password": {
-                "description": "Windows Credential Manager target for Snowflake connection password.",
-                "cmdkey_example": "cmdkey /generic:icepick:snowflake_password /user:icepick /pass:<PASSWORD>",
-            },
-            "icepick:snowflake_account": {
-                "description": "Windows Credential Manager target for Snowflake account identifier.",
-                "cmdkey_example": "cmdkey /generic:icepick:snowflake_account /user:icepick /pass:<ACCOUNT>",
-            },
-            "icepick:snowflake_user": {
-                "description": "Windows Credential Manager target for Snowflake user name.",
-                "cmdkey_example": "cmdkey /generic:icepick:snowflake_user /user:icepick /pass:<USER>",
             },
         },
     }

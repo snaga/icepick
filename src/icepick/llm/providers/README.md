@@ -18,6 +18,7 @@
    ```python
    from icepick.llm.providers.base import BaseLLMProvider
 
+
    class CustomProvider(BaseLLMProvider):
        @property
        def name(self) -> str:

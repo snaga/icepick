@@ -10,7 +10,7 @@ from icepick.llm.client import LLMClient
 from icepick.llm.slicer import ContextSlicer, SliceContext
 from icepick.parser import parse_snowflake_sql
 from icepick.patcher.agentic import AgenticPatcher
-from icepick.verifier.equivalence import EquivalenceVerifier, VerificationResult
+from icepick.verifier.equivalence import VerificationResult
 
 
 def test_agentic_patcher_init_defaults() -> None:
@@ -302,7 +302,7 @@ def test_agentic_patcher_verify_loop_success_after_retry() -> None:
     mock_llm_client.rewrite_fragment.side_effect = [repl1, repl2]
 
     # Mock verifier: first attempt fails (difference), second attempt passes (equivalent)
-    mock_verifier = MagicMock(spec=EquivalenceVerifier)
+    mock_verifier = MagicMock()
     mock_verifier.verify_with_snowflake.side_effect = [
         VerificationResult(
             is_equivalent=False,
@@ -365,7 +365,7 @@ def test_agentic_patcher_verify_loop_exhausted_retries_falls_back() -> None:
     ]
 
     # Mock verifier: all attempts fail verification
-    mock_verifier = MagicMock(spec=EquivalenceVerifier)
+    mock_verifier = MagicMock()
     mock_verifier.verify_with_snowflake.return_value = VerificationResult(
         is_equivalent=False,
         orig_not_in_opt_count=5,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,7 +9,6 @@ import pytest
 from icepick.config import Config
 from icepick.credentials import (
     AuthenticationError,
-    format_actionable_pair_error,
     format_actionable_provider_guidance,
 )
 from icepick.health.tester import (
@@ -104,7 +102,9 @@ class TestConnectionTesterLLM:
         """Verify Gemini auth failure provides actionable guidance with Vertex AI options."""
         monkeypatch.setattr(
             "icepick.health.tester.LLMClient",
-            MagicMock(side_effect=AuthenticationError("API key missing", key_name="gemini_api_key")),
+            MagicMock(
+                side_effect=AuthenticationError("API key missing", key_name="gemini_api_key")
+            ),
         )
 
         tester = ConnectionTester()
@@ -252,164 +252,6 @@ class TestConnectionTesterLLM:
         assert result.actionable_advice == "Please run 'gcloud auth application-default login'"
 
 
-class TestConnectionTesterSnowflake:
-    """Test suite for Snowflake connection testing in ConnectionTester."""
-
-    def test_snowflake_check_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify successful Snowflake connection extracts metadata into details."""
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = ("8.12.0", "SYS_USER", "COMPUTE_WH")
-
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value = mock_cursor
-
-        mock_connector = MagicMock()
-        mock_connector.connect.return_value = mock_conn
-
-        monkeypatch.setattr(
-            "icepick.health.tester.importlib.import_module",
-            lambda name: mock_connector if name == "snowflake.connector" else None,
-        )
-
-        tester = ConnectionTester()
-        cfg = Config(
-            snowflake_account="test-account",
-            snowflake_database="TEST_DB",
-            snowflake_schema="PUBLIC",
-            snowflake_warehouse="COMPUTE_WH",
-            snowflake_user="SYS_USER",
-            snowflake_password="secret_password",
-        )
-
-        result = tester.test_snowflake(cfg, timeout=8.0)
-
-        assert result.service == "snowflake"
-        assert result.success is True
-        assert result.duration_ms >= 0.0
-        assert result.message == "Successfully connected to Snowflake."
-        assert result.details["version"] == "8.12.0"
-        assert result.details["user"] == "SYS_USER"
-        assert result.details["warehouse"] == "COMPUTE_WH"
-        assert result.details["account"] == "test-account"
-        assert result.details["database"] == "TEST_DB"
-        assert result.actionable_advice is None
-        mock_cursor.close.assert_called_once()
-        mock_conn.close.assert_called_once()
-
-    def test_snowflake_check_missing_credentials_actionable_advice(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Verify missing credentials triggers WCM pair registration guidance."""
-        for key in [
-            "SNOWFLAKE_ACCOUNT",
-            "SNOWFLAKE_USER",
-            "SNOWFLAKE_PASSWORD",
-            "SNOWFLAKE_DATABASE",
-            "SNOWFLAKE_WAREHOUSE",
-            "DEBUG_ICEPICK_SNOWFLAKE_USER",
-            "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD",
-        ]:
-            monkeypatch.delenv(key, raising=False)
-
-        monkeypatch.setattr(
-            "icepick.health.tester.resolve_credential_pair",
-            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake")),
-        )
-
-        tester = ConnectionTester()
-        cfg = Config(
-            snowflake_account="my-acct",
-            snowflake_database="my-db",
-            snowflake_warehouse="my-wh",
-            snowflake_user=None,
-            snowflake_password=None,
-        )
-
-        result = tester.test_snowflake(cfg)
-
-        assert result.service == "snowflake"
-        assert result.success is False
-        assert "user, password" in result.message
-        assert result.actionable_advice is not None
-        assert "icepick:snowflake" in result.actionable_advice
-        assert "cmdkey" in result.actionable_advice
-        assert "Get-Credential" in result.actionable_advice
-
-    def test_snowflake_check_missing_infra_parameters_advice(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Verify missing infrastructure configuration prompts for config or env vars."""
-        tester = ConnectionTester()
-        cfg = Config(
-            snowflake_account="",
-            snowflake_database="",
-            snowflake_warehouse="",
-            snowflake_user="myuser",
-            snowflake_password="mypassword",
-        )
-
-        result = tester.test_snowflake(cfg)
-
-        assert result.service == "snowflake"
-        assert result.success is False
-        assert "Missing required Snowflake parameter(s)" in result.message
-        assert result.actionable_advice is not None
-        assert ".icepick.toml" in result.actionable_advice
-
-    def test_snowflake_check_missing_driver(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify missing snowflake-connector module prompts installation instructions."""
-
-        def fake_import(name: str) -> Any:
-            if name == "snowflake.connector":
-                raise ImportError("No module named 'snowflake'")
-            return None
-
-        monkeypatch.setattr("icepick.health.tester.importlib.import_module", fake_import)
-
-        tester = ConnectionTester()
-        cfg = Config(
-            snowflake_account="my-acct",
-            snowflake_database="my-db",
-            snowflake_warehouse="my-wh",
-            snowflake_user="myuser",
-            snowflake_password="mypassword",
-        )
-
-        result = tester.test_snowflake(cfg)
-
-        assert result.service == "snowflake"
-        assert result.success is False
-        assert "snowflake-connector-python is not installed" in result.message
-        assert result.actionable_advice is not None
-        assert "pip install snowflake-connector-python" in result.actionable_advice
-
-    def test_snowflake_check_connection_auth_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify database authentication error 250001 triggers WCM pair advice."""
-        mock_connector = MagicMock()
-        mock_connector.connect.side_effect = Exception("250001: Incorrect username or password.")
-
-        monkeypatch.setattr(
-            "icepick.health.tester.importlib.import_module",
-            lambda name: mock_connector if name == "snowflake.connector" else None,
-        )
-
-        tester = ConnectionTester()
-        cfg = Config(
-            snowflake_account="my-acct",
-            snowflake_database="my-db",
-            snowflake_warehouse="my-wh",
-            snowflake_user="myuser",
-            snowflake_password="wrong_password",
-        )
-
-        result = tester.test_snowflake(cfg)
-
-        assert result.service == "snowflake"
-        assert result.success is False
-        assert "Incorrect username or password" in result.message
-        assert result.actionable_advice == format_actionable_pair_error("snowflake")
-
-
 class TestConnectionHealthReportAndAll:
     """Test suite for ConnectionHealthReport aggregation and ConnectionTester.test_all."""
 
@@ -422,32 +264,25 @@ class TestConnectionHealthReportAndAll:
             message="LLM ok",
             details={"model": "gemini-3.8-flash"},
         )
-        r2 = ServiceTestResult(
-            service="snowflake",
-            success=True,
-            duration_ms=120.0,
-            message="Snowflake ok",
-            details={"version": "8.10"},
-        )
 
-        report = ConnectionHealthReport(results={"llm": r1, "snowflake": r2})
+        report = ConnectionHealthReport(results={"llm": r1})
         assert report.all_passed is True
 
         data = report.to_dict()
         assert data["all_passed"] is True
         assert "llm" in data["results"]
         assert data["results"]["llm"]["success"] is True
-        assert data["results"]["snowflake"]["duration_ms"] == 120.0
+        assert data["results"]["llm"]["duration_ms"] == 42.5
 
-        # Partial failure
-        r2_fail = ServiceTestResult(
-            service="snowflake",
+        # Failure case
+        r1_fail = ServiceTestResult(
+            service="llm",
             success=False,
             duration_ms=10.0,
             message="Failed",
             actionable_advice="Fix config",
         )
-        report_fail = ConnectionHealthReport(results={"llm": r1, "snowflake": r2_fail})
+        report_fail = ConnectionHealthReport(results={"llm": r1_fail})
         assert report_fail.all_passed is False
         assert report_fail.to_dict()["all_passed"] is False
 
@@ -456,27 +291,26 @@ class TestConnectionHealthReportAndAll:
         assert empty_report.all_passed is False
 
     def test_test_all_runs_specified_targets(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify test_all executes only specified targets and aggregates them."""
+        """Verify test_all executes LLM target by default and rejects invalid targets."""
         tester = ConnectionTester()
         cfg = Config()
 
         res_llm = ServiceTestResult(service="llm", success=True, duration_ms=10.0, message="ok")
-        res_sf = ServiceTestResult(
-            service="snowflake", success=True, duration_ms=20.0, message="ok"
-        )
-
         monkeypatch.setattr(tester, "test_llm", MagicMock(return_value=res_llm))
-        monkeypatch.setattr(tester, "test_snowflake", MagicMock(return_value=res_sf))
 
-        # Default runs both
+        # Default runs ("llm",)
         report = tester.test_all(cfg)
-        assert len(report.results) == 2
+        assert len(report.results) == 1
+        assert "llm" in report.results
         assert report.all_passed is True
 
-        # LLM only
+        # Explicit LLM target
         report_llm = tester.test_all(cfg, targets=["llm"])
         assert list(report_llm.results.keys()) == ["llm"]
 
-        # Invalid target raises ValueError
+        # Snowflake or other targets now raise ValueError
+        with pytest.raises(ValueError, match="Unsupported health test target"):
+            tester.test_all(cfg, targets=["snowflake"])
+
         with pytest.raises(ValueError, match="Unsupported health test target"):
             tester.test_all(cfg, targets=["postgres"])

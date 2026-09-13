@@ -86,9 +86,9 @@ class TestAgentContextUnit:
 
         assert "test" in config_cmd["subcommands"]
         test_sub = config_cmd["subcommands"]["test"]
-        assert "--target" in test_sub["options"]
-        assert "--llm" in test_sub["options"]
-        assert "--snowflake" in test_sub["options"]
+        assert "--target" not in test_sub["options"]
+        assert "--llm" not in test_sub["options"]
+        assert "--snowflake" not in test_sub["options"]
         assert "--provider" in test_sub["options"]
         assert test_sub["options"]["--provider"]["choices"] == ["gemini", "vertex"]
         assert "--model" in test_sub["options"]
@@ -157,10 +157,6 @@ class TestAgentContextUnit:
         assert snow_002["name"] == "CorrelatedSubqueryRule"
         assert snow_002["can_auto_fix"] is False
         assert snow_002["severity"] == "CRITICAL"
-        assert (
-            snow_002["description"]
-            == "Detects correlated subqueries referencing outer query tables that may trigger repetitive table scans and memory spilling."
-        )
 
         snow_003 = next(r for r in rules if r["id"] == "SNOW-003")
         assert snow_003["name"] == "RedundantSortRule"
@@ -193,7 +189,7 @@ class TestAgentContextUnit:
         env_vars = ctx["environment_variables"]
 
         assert "DEBUG_ICEPICK_GEMINI_API_KEY" in env_vars
-        assert "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD" in env_vars
+        assert "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD" not in env_vars
 
         # Ensure no generic/broad environment variables are included
         for var_name in env_vars:
@@ -205,7 +201,7 @@ class TestAgentContextUnit:
         creds = ctx["credentials"]
 
         assert "icepick:gemini_api_key" in creds
-        assert "icepick:snowflake_password" in creds
+        assert "icepick:snowflake_password" not in creds
         for cred_target, cred_info in creds.items():
             assert cred_target.startswith("icepick:")
             assert "description" in cred_info

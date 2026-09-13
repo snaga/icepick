@@ -79,7 +79,8 @@ flowchart TD
     InPlace --> Diff["DiffFormatter (difflib)"]
     Diff --> Terminal["Rich Color Unified Diff / .patch"]
     Terminal --> Verifier["EquivalenceVerifier"]
-    Verifier --> DB["Snowflake (EXCEPT Verification)"]
+    Verifier --> SQL["Pure Verification SQL (stdout / -o)"]
+    SQL --> DB["Snowflake CLI / SnowSQL (snow sql -f -)"]
 ```
 
 ---
@@ -229,29 +230,41 @@ icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run
 
 ---
 
-### 4. セマンティクス等価性の検証 (`verify`)
-元クエリと最適化クエリが同一の結果セットを返すことを、Snowflake 上で双方向 `EXCEPT` クエリを実行して決定論的・数学的に証明します。
+### 4. セマンティクス等価性検証 SQL の生成 (`verify`)
+元クエリと最適化クエリが同一の結果セットを返すことを証明するための双方向 `EXCEPT` 検証クエリを決定論的・数学的に生成します（ADR-0004: クレデンシャル不要・純粋 SQL 生成モデル）。
 
-#### Snowflake 実環境で等価性を検証する
-```bash
-icepick verify models/batch_mart.sql models/batch_mart_optimized.sql
-```
-```text
-✓ Equivalence Verified! Queries are mathematically equivalent (0 differences in both directions).
-```
+Icepick 自体は Snowflake への直接接続を行わないため、**データベース認証情報・パスワードは一切不要**です。生成された SQL は、開発者が使い慣れた Snowflake CLI (`snow sql`) や `snowsql` にパイプまたはファイル渡しで安全に実行できます。
 
-#### 検証用 SQL のみ確認する (`--dry-run`)
-Snowflake に接続せず、生成された双方向 EXCEPT クエリをターミナルに表示します。
+#### ターミナルへ検証 SQL を出力（パイプライン連携）
 ```bash
-icepick verify models/batch_mart.sql models/batch_mart_optimized.sql --dry-run
+# 標準出力へ検証 SQL を生成し、Snowflake CLI にそのまま流し込む
+icepick verify models/batch_mart.sql models/batch_mart_optimized.sql | snow sql -f -
 ```
 
-#### 検証ループによる自己修復リライト (`rewrite --verify-loop`)
-LLM によるリライト結果を Snowflake 双方向 EXCEPT で即座に自動検証し、差分が発生した場合はエラーフィードバックをプロンプトに注入して最大 3 回自己修復ループを回します。
+#### 検証用 SQL をファイルに保存する (`--output` / `-o`)
 ```bash
-icepick rewrite models/batch_mart.sql --agentic --verify-loop
+# 検証 SQL ファイルを出力
+icepick verify models/batch_mart.sql models/batch_mart_optimized.sql -o verify_query.sql
+
+# 保存した SQL を任意のクライアントで実行
+snow sql -f verify_query.sql
 ```
-*(※ 双方向の差分がともに `0` となる完全等価性が証明された Diff のみが出力されるため、安心してパッチ適用できます)*
+
+#### 生成される検証 SQL の例
+```sql
+-- Icepick Bidirectional Equivalence Verification Query
+-- Dialect: snowflake
+WITH diff_forward AS (
+    (SELECT * FROM original) EXCEPT (SELECT * FROM optimized)
+),
+diff_backward AS (
+    (SELECT * FROM optimized) EXCEPT (SELECT * FROM original)
+)
+SELECT
+    (SELECT COUNT(*) FROM diff_forward) AS missing_in_optimized,
+    (SELECT COUNT(*) FROM diff_backward) AS extra_in_optimized;
+```
+*(※ 両方の差分件数が 0 であれば、結果セットが完全等価であることが数学的・集合論的に証明されます)*
 
 
 ---
@@ -292,15 +305,20 @@ icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run --json
 
 ## 🔐 セキュアな認証設定 (Authentication)
 
-API キーやパスワードなどの機密情報を安全に保護し、シェル履歴（`ConsoleHost_history.txt`）への平文残存や GitHub への誤コミットを防ぐため、Icepick は **Windows 資格情報マネージャー (Windows Credential Manager: WCM)** を標準の認証ストレージとして採用しています。
+> [!NOTE]
+> **ゼロ・クレデンシャル設計 (ADR-0004)**:
+> Icepick は Snowflake データベースへの直接接続・実行を行わないため、**Snowflake のアカウント情報・ユーザー名・パスワードなどの認証情報は一切不要**です。すべての構文解析、静的診断、AST リライト、および等価性検証 SQL（`verify`）の生成はローカル環境で完結します。
+
+LLM による高度な外科手術的リライト（`--agentic`）を利用する場合にのみ、LLM プロバイダの認証設定が必要となります。
+API キーなどの機密情報を安全に保護し、シェル履歴（`ConsoleHost_history.txt`）への平文残存や GitHub への誤コミットを防ぐため、Icepick は **Windows 資格情報マネージャー (Windows Credential Manager: WCM)** を標準の認証ストレージとして採用しています。
 
 > [!IMPORTANT]
 > **環境汚染防止のための設計方針**:
-> 他のツールや親プロセスからの偶発的なトークン混入・情報漏洩を防ぐため、**一般的な環境変数（`GEMINI_API_KEY` や `SNOWFLAKE_PASSWORD`、`SNOWFLAKE_USER` 等）は意図的に探索対象から除外** されています。
+> 他のツールや親プロセスからの偶発的なトークン混入・情報漏洩を防ぐため、**一般的な環境変数（`GEMINI_API_KEY` 等）は意図的に探索対象から除外** されています。
 
 ### 認証解決の優先順位 (Priority Pyramid)
-1. **一時デバッグ / CI・CD 専用環境変数** (`DEBUG_ICEPICK_<KEY>`)
-2. **Windows 資格情報マネージャー** (`icepick:<key>` / `icepick:snowflake`)
+1. **一時デバッグ / CI・CD 専用環境変数** (`DEBUG_ICEPICK_GEMINI_API_KEY`)
+2. **Windows 資格情報マネージャー** (`icepick:gemini_api_key`)
 3. **自己修正エラー (Actionable Error)**
 
 ---
@@ -308,20 +326,12 @@ API キーやパスワードなどの機密情報を安全に保護し、シェ�
 ### 推奨設定手順 (PowerShell マスク入力)
 シェル履歴に秘密情報を一切残さないため、PowerShell の対話型マスク入力を推奨します。
 
-#### 1. Gemini API キーの登録 (LLM 局所リライト用)
+#### Gemini API キーの登録 (LLM 局所リライト用)
 ```powershell
 $cred = Get-Credential -UserName "any" -Message "Gemini API Key をパスワード欄に入力してください"
 cmdkey /generic:icepick:gemini_api_key /user:any /pass:$($cred.GetNetworkCredential().Password)
 ```
-
-#### 2. Snowflake 認証情報（ユーザ名・パスワードペア）の登録 (verify コマンド用)
-Icepick では、Snowflake のユーザー名とパスワードをペアで安全に管理する **`icepick:snowflake`** を採用しています。
-```powershell
-# Recommended (safe, masked input without leaving credentials in shell history):
-$cred = Get-Credential -Message "Enter Snowflake Credentials"
-cmdkey /generic:icepick:snowflake /user:$($cred.UserName) /pass:$($cred.GetNetworkCredential().Password)
-```
-*(※ ダイアログの「ユーザー名」に Snowflake ユーザー名、「パスワード」に Snowflake パスワードを入力します)*
+*(※ Vertex AI を利用する場合は、Google Cloud ADC `gcloud auth application-default login` が自動的に使用されるため、キーの登録は不要です)*
 
 ---
 
@@ -329,9 +339,6 @@ cmdkey /generic:icepick:snowflake /user:$($cred.UserName) /pass:$($cred.GetNetwo
 ```cmd
 # Gemini API キー
 cmdkey /generic:icepick:gemini_api_key /user:any /pass:<your_gemini_api_key>
-
-# Snowflake 認証情報（ユーザ名・パスワードペア）
-cmdkey /generic:icepick:snowflake /user:<snowflake_user> /pass:<snowflake_password>
 ```
 *(※ `cmdkey` 特有の UTF-16LE / Null byte トラップは Icepick 内部で自動検知・安全にデコードされます)*
 
@@ -344,7 +351,6 @@ cmdkey /list:icepick:*
 
 # 削除
 cmdkey /delete:icepick:gemini_api_key
-cmdkey /delete:icepick:snowflake
 ```
 
 ---
@@ -355,15 +361,11 @@ CI 環境やローカルでの一時実行に限り、`DEBUG_ICEPICK_` プレフ
 ```powershell
 # PowerShell
 $env:DEBUG_ICEPICK_GEMINI_API_KEY = "your_key"
-$env:DEBUG_ICEPICK_SNOWFLAKE_USER = "<snowflake_user>"
-$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD = "<snowflake_password>"
 ```
 
 ```bash
 # Bash / CI
 export DEBUG_ICEPICK_GEMINI_API_KEY="your_key"
-export DEBUG_ICEPICK_SNOWFLAKE_USER="<snowflake_user>"
-export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="<snowflake_password>"
 ```
 
 ---
@@ -393,7 +395,7 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
 1. **CLI オプション (`cli`)**: コマンドライン実行時に直接渡された引数（最優先）。
 2. **環境変数 (`env`)**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GCP_PROJECT`, `GOOGLE_CLOUD_PROJECT` 等の環境変数。
 3. **設定ファイル (`file`)**: `--config` で指定されたファイル、またはカレントディレクトリの `.icepick.toml` / `icepick.json`。
-4. **セキュア認証情報 (`keyring`)**: Windows 資格情報マネージャー (WCM) に暗号化保存されたクレデンシャル（`icepick:gemini_api_key`, `icepick:snowflake`）。API キーだけでなく、Snowflake 認証ペア（`snowflake_user`, `snowflake_password`）も機密情報として安全に解決されます。
+4. **セキュア認証情報 (`keyring`)**: Windows 資格情報マネージャー (WCM) に暗号化保存されたクレデンシャル（`icepick:gemini_api_key`）。API キーは機密情報（`SECRET_KEYS`）として安全に解決されます。
 5. **組み込みデフォルト値 (`default`)**: コードベースに組み込まれた安全なフォールバックデフォルト。
 
 ---
@@ -403,7 +405,7 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
 どの設定値がどのソースレイヤーによって決定されたかを可視化するため、Icepick は強力な実行時フィードバック機構を備えています。
 
 #### 1. ターミナルでの Rich バナー表示
-`rewrite --agentic` や `--verify-loop` 実行時、適用されている設定とその決定元ソース（CLI / ENV / FILE / KEYRING / DEFAULT）がターミナル上にカラーパネルで表示されます。
+`rewrite --agentic` 実行時、適用されている設定とその決定元ソース（CLI / ENV / FILE / KEYRING / DEFAULT）がターミナル上にカラーパネルで表示されます。
 
 ```text
 ╭─ Active LLM Configuration ────────────────────────────────╮
@@ -417,7 +419,7 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
 ```
 
 #### 2. 機械可読な `--json` 出力 (`runtime_config`)
-`rewrite --json` 出力には、生成差分データに加えて `runtime_config` オブジェクトが含まれ、解決された値とソースレイヤーがすべて記録されます（API キーやパスワード、Snowflake ユーザー名などの機密情報は自動マスキング）。
+`rewrite --json` 出力には、生成差分データに加えて `runtime_config` オブジェクトが含まれ、解決された値とソースレイヤーがすべて記録されます（API キーなどの機密情報は自動マスキング）。
 
 ```json
 {
@@ -429,14 +431,13 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
     "llm_model": { "value": "gemini-1.5-pro", "source": "cli" },
     "gcp_project": { "value": "my-company-gcp-project", "source": "env" },
     "gcp_location": { "value": "global", "source": "file" },
-    "gemini_api_key": { "value": "***", "source": "keyring" },
-    "snowflake_user": { "value": "***", "source": "keyring" }
+    "gemini_api_key": { "value": "***", "source": "keyring" }
   }
 }
 ```
 
 #### 3. 設定インスペクション (`icepick config show`)
-現在のアクティブな設定一覧、解決元ソース、マスク済みシークレットをいつでも確認できます。`snowflake_user` も機密情報（`SECRET_KEYS`）として管理されているため、パスワードや API キーと同様に安全にマスク表示されます。
+現在のアクティブな設定一覧、解決元ソース、マスク済みシークレットをいつでも確認できます。`gemini_api_key` は機密情報（`SECRET_KEYS`）として管理されているため、安全にマスク表示されます。
 
 ```bash
 icepick config show
@@ -453,8 +454,6 @@ icepick config show
 │ gcp_project         │ my-gcp-proj         │ env          │
 │ gcp_location        │ global              │ file         │
 │ gemini_api_key      │ ***                 │ keyring      │
-│ snowflake_user      │ ***                 │ keyring      │
-│ snowflake_password  │ ***                 │ keyring      │
 └─────────────────────┴─────────────────────┴──────────────┘
 ```
 
@@ -467,25 +466,22 @@ icepick config show --json
 
 ### 🩺 接続事前診断 (Connection Health Check: `icepick config test`)
 
-最適化（`rewrite --agentic`）や検証（`verify`）を実行する前に、LLM（Gemini / Vertex AI）や Snowflake の設定・認証・ネットワーク疎通が正常かを一発で確認できるヘルスチェックコマンドです。
+局所 LLM 最適化（`rewrite --agentic`）を実行する前に、LLM（Gemini / Vertex AI）の設定・認証・ネットワーク疎通が正常かを一発で確認できるヘルスチェックコマンドです。
 
 ```bash
-# 1. 一括接続診断（LLM & Snowflake）
+# 1. デフォルト設定で LLM 接続診断
 icepick config test
 
-# 2. LLM のみ診断
-icepick config test --llm
-
-# 3. Vertex AI の接続診断（設定ファイル未作成でも即時確認可能）
+# 2. Vertex AI の接続診断（設定ファイル未作成でも即時確認可能）
 icepick config test --provider vertex
 
-# 4. モデルを指定して診断
+# 3. モデルを指定して診断
 icepick config test --provider vertex --model gemini-2.5-flash
 
-# 5. Snowflake のみ診断
-icepick config test --snowflake
+# 4. タイムアウト秒数を指定
+icepick config test --timeout 15.0
 
-# 6. 機械可読な JSON 出力（CI / エージェント連携）
+# 5. 機械可読な JSON 出力（CI / エージェント連携）
 icepick config test --json
 ```
 
@@ -494,7 +490,7 @@ icepick config test --json
 > デフォルトでは `gemini` プロバイダが選択されるため、Google Cloud Vertex AI（ADC認証 / サービスアカウント偽装）を利用する環境では、CLI オプション `--provider vertex`（または環境変数 `ICEPICK_LLM_PROVIDER=vertex`、設定ファイルの `llm_provider = "vertex"`）を明示的に指定して診断を実行してください。設定ファイルが未作成の状態でも即座に Vertex AI 疎通・認証の健全性を確認できます。
 
 #### 診断結果の Rich Table 表示
-各サービスの接続成否、RTT（レイテンシ）、および接続先詳細が美しい表形式で可視化されます。
+接続成否、RTT（レイテンシ）、および接続先詳細が美しい表形式で可視化されます。
 
 ```text
                   Icepick Connection Health Check                 
@@ -503,8 +499,6 @@ icepick config test --json
 ┡━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
 │ LLM       │  PASS  │ 120.4ms │ provider=vertex, model=gemini- │
 │           │        │         │ 1.5-pro, project=my-project    │
-│ SNOWFLAKE │  PASS  │ 350.2ms │ account=xy12345.ap-northeast-1 │
-│           │        │         │ .aws, database=ANALYTICS       │
 └───────────┴────────┴─────────┴────────────────────────────────┘
 ```
 
@@ -566,26 +560,23 @@ icepick rewrite models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 
 ### 📄 設定ファイル (`icepick.json` / `.icepick.toml`) の作り方
 
-プロジェクト直下に `icepick.json` または `.icepick.toml` を配置することで、チーム全体で共通のルールや Snowflake 接続構成（インフラ設定）、動作オプションをコード管理できます。
+プロジェクト直下に `icepick.json` または `.icepick.toml` を配置することで、チーム全体で共通のルールや動作オプションをコード管理できます。
 
 #### 基本サンプル (`.icepick.toml` / `icepick.json`)
 
 **TOML形式 (`.icepick.toml` - 推奨)**:
 ```toml
 dialect = "snowflake"
-snowflake_account = "xy12345.ap-northeast-1.aws"
-snowflake_database = "ANALYTICS"
-snowflake_schema = "PUBLIC"
-snowflake_warehouse = "COMPUTE_WH"
-snowflake_role = "SYSADMIN"
 disabled_rules = ["SNOW-007"]
 
 llm_enabled = true
 llm_provider = "vertex"
 llm_model = "gemini-1.5-pro"
+gcp_project = "my-company-gcp-project"
+gcp_location = "global"
 
 # プラガブル LLM プロバイダ固有オプション
-[llm.options]
+[llm_options]
 project = "my-company-gcp-project"
 location = "global"
 ```
@@ -594,11 +585,6 @@ location = "global"
 ```json
 {
   "dialect": "snowflake",
-  "snowflake_account": "xy12345.ap-northeast-1.aws",
-  "snowflake_database": "ANALYTICS",
-  "snowflake_schema": "PUBLIC",
-  "snowflake_warehouse": "COMPUTE_WH",
-  "snowflake_role": "SYSADMIN",
   "enabled_rules": [],
   "disabled_rules": ["SNOW-007"],
   "interactive": false,
@@ -617,27 +603,15 @@ location = "global"
 }
 ```
 
-> [!IMPORTANT]
-> **Snowflake 接続情報の分離と機密保護ベストプラクティス**:
-> 設定ファイル（`icepick.json`, `.icepick.toml`）には、アカウント名・データベース・スキーマ・ウェアハウス・ロールなどの**インフラ接続情報のみ**を記載してください。
-> ユーザー名やパスワードなどの認証情報は設定ファイルに混在させず、Windows 資格情報マネージャー（WCM: `icepick:snowflake`）で一元管理します。
-> これにより、チーム共有の Git リポジトリに機密情報がコミットされるセキュリティ事故を根本から防止します。
-> （※ 安全のため、仮に設定ファイル内に `snowflake_user` や `snowflake_password` を記述しても、Icepick はそれらを意図的に無視し、WCM または一時デバッグ用環境変数からのみ解決します）
-
 > [!CAUTION]
-> **API キーやパスワードなどの機密情報を設定ファイルに書かないでください！**  
-> `icepick.json` や `.env` に API キーを平文で記述すると、GitHub への誤コミットや情報漏洩の原因になります。  
+> **API キーなどの機密情報を設定ファイルに書かないでください！**  
+> `icepick.json` や `.icepick.toml` に API キーを平文で記述すると、GitHub への誤コミットや情報漏洩の原因になります。  
 > 認証情報は必ず前述の [セキュアな認証設定](#-セキュアな認証設定-authentication) に従って **Windows 資格情報マネージャー (WCM)** に登録してください。Icepick は実行時に自動で WCM から安全に認証情報を解決します。
 
 #### 設定キー一覧
 | キー名 | 型 | デフォルト値 | 説明 |
 | :--- | :---: | :---: | :--- |
 | `dialect` | `string` | `"snowflake"` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) |
-| `snowflake_account` | `string \| null` | `null` | Snowflake アカウント識別子（例: `xy12345.ap-northeast-1.aws`） |
-| `snowflake_database` | `string \| null` | `null` | デフォルトの Snowflake データベース名 |
-| `snowflake_schema` | `string \| null` | `null` | デフォルトの Snowflake スキーマ名 |
-| `snowflake_warehouse` | `string \| null` | `null` | クエリ実行に使用する仮想ウェアハウス名 |
-| `snowflake_role` | `string \| null` | `null` | セッションで使用する Snowflake ロール名 |
 | `enabled_rules` | `array[string]` | `[]` | 実行するルールIDのホワイトリスト。空の場合は無効化されていない全ルールを実行。 |
 | `disabled_rules` | `array[string]` | `[]` | スキップするルールIDのブラックリスト（例: `["SNOW-007"]`）。 |
 | `interactive` | `boolean` | `false` | `patch` コマンドで変更箇所（Hunk）ごとに承認プロンプトを出すか。 |
@@ -649,12 +623,12 @@ location = "global"
 | `llm_model` | `string` | `"gemini-3.8-flash"` | 使用する LLM モデル名。 |
 | `gcp_project` | `string \| null` | `null` | Vertex AI 利用時の Google Cloud プロジェクト ID。 |
 | `gcp_location` | `string \| null` | `"us-central1"` | Vertex AI 利用時の Google Cloud リージョン（`"global"` 推奨）。 |
-| `llm_options` | `object (dict)` | `{}` | プラガブル LLM プロバイダへ渡す固有オプション辞書（`.icepick.toml` の `[llm.options]` セクション）。 |
+| `llm_options` | `object (dict)` | `{}` | プラガブル LLM プロバイダへ渡す固有オプション辞書（`.icepick.toml` の `[llm_options]` セクション）。 |
 
 #### 🔌 プラガブル LLM プロバイダ構成と拡張性 (Pluggable Architecture)
 Icepick はオープン・クローズドの原則（OCP）に基づき、LLM バックエンドの接続基盤を**プラガブルアーキテクチャ**として設計しています。
 - **プロバイダ固有オプションの柔軟な指定**:
-  `.icepick.toml` の `[llm.options]` セクション（または JSON の `llm_options` キー）を通じて、各プロバイダ固有のパラメータ（`project`, `location`, 各種エンドポイント設定など）を汎用 Dict として安全に渡すことができます。
+  `.icepick.toml` の `[llm_options]` セクション（または JSON の `llm_options` キー）を通じて、各プロバイダ固有のパラメータ（`project`, `location`, 各種エンドポイント設定など）を汎用 Dict として安全に渡すことができます。
 - **新規プロバイダの動的登録・差し替え**:
   `icepick.llm.providers.base.BaseLLMProvider` を継承して `name`, `generate_text()`, `health_check()` を実装し、`register_provider()` で登録することで、既存のコアエンジン（`LLMClient` や `ConnectionTester`）に手を加えることなく新しいカスタムプロバイダ（OpenAI, Anthropic, ローカルLLM等）を追加・拡張可能です。
 
@@ -675,15 +649,7 @@ icepick rewrite models/batch_mart.sql -c .icepick.toml
 | 設定項目 / 環境変数 | 説明 | 格納先 / デフォルト値 |
 | :--- | :--- | :--- |
 | `icepick:gemini_api_key` | Google AI Studio の API キー | **Windows 資格情報マネージャー** (推奨) |
-| `icepick:snowflake` | Snowflake 認証情報（ユーザ名とパスワードのペア） | **Windows 資格情報マネージャー** (推奨) |
 | `DEBUG_ICEPICK_GEMINI_API_KEY` | (デバッグ/CI用) Gemini API キー | 環境変数 (未設定) |
-| `DEBUG_ICEPICK_SNOWFLAKE_USER` | (デバッグ/CI用) Snowflake ユーザー名 | 環境変数 (未設定) |
-| `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD` | (デバッグ/CI用) Snowflake パスワード | 環境変数 (未設定) |
-| `SNOWFLAKE_ACCOUNT` | Snowflake アカウント識別子 | 環境変数 (未設定) |
-| `SNOWFLAKE_DATABASE` | Snowflake データベース名 | 環境変数 (未設定) |
-| `SNOWFLAKE_SCHEMA` | Snowflake スキーマ名 | 環境変数 (未設定) |
-| `SNOWFLAKE_WAREHOUSE` | Snowflake ウェアハウス名 | 環境変数 (未設定) |
-| `SNOWFLAKE_ROLE` | Snowflake ロール名 | 環境変数 (未設定) |
 | `ICEPICK_DIALECT` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) | `snowflake` |
 | `ICEPICK_ENABLED_RULES` | 有効化するルールID（カンマ区切り） | すべて有効 |
 | `ICEPICK_DISABLED_RULES` | 無効化するルールID（カンマ区切り） | なし |

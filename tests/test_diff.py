@@ -291,15 +291,7 @@ def test_apply_unified_diff_indent_re_targeting() -> None:
       - Inserted lines (+ lines) are automatically re-indented to 4 spaces to seamlessly
         blend into the original file's formatting style.
     """
-    original = (
-        "SELECT\n"
-        "    id,\n"
-        "    name\n"
-        "FROM\n"
-        "    users\n"
-        "WHERE\n"
-        "    id = 1\n"
-    )
+    original = "SELECT\n    id,\n    name\nFROM\n    users\nWHERE\n    id = 1\n"
 
     # Patch created with 2-space indentation
     diff = (
@@ -317,14 +309,7 @@ def test_apply_unified_diff_indent_re_targeting() -> None:
     assert applied == 1
 
     expected = (
-        "SELECT\n"
-        "    id,\n"
-        "    name\n"
-        "FROM\n"
-        "    users\n"
-        "WHERE\n"
-        "    id = 2\n"
-        "    AND active = TRUE\n"
+        "SELECT\n    id,\n    name\nFROM\n    users\nWHERE\n    id = 2\n    AND active = TRUE\n"
     )
     assert patched == expected
 
@@ -425,4 +410,3 @@ def test_apply_unified_diff_tab_indent_re_targeting() -> None:
 
     expected = "SELECT\n\tid,\n\tname\nFROM\n\tusers\nWHERE\n\tid = 2\n\tAND active = TRUE\n"
     assert patched == expected
-

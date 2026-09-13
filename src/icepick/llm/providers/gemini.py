@@ -125,9 +125,7 @@ class GeminiProvider(BaseLLMProvider):
 
         # Aggregate all text blocks from parts to support thinking models and multi-part responses.
         text = "".join(
-            part.get("text", "")
-            for part in parts
-            if isinstance(part, dict) and "text" in part
+            part.get("text", "") for part in parts if isinstance(part, dict) and "text" in part
         )
         if not text.strip():
             raise ValueError("Gemini returned an empty response or unexpected content format.")

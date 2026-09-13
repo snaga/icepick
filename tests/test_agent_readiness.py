@@ -190,7 +190,7 @@ class TestAgentReadiness:
             mock_tester.test_all.return_value = mock_report
             mock_tester_cls.return_value = mock_tester
 
-            res_test = runner.invoke(app, ["config", "test", "--llm", "--json"])
+            res_test = runner.invoke(app, ["config", "test", "--json"])
             assert res_test.exit_code == 0
             data_test = _assert_valid_json_and_no_ansi(res_test.stdout)
             assert isinstance(data_test, dict)
@@ -225,32 +225,42 @@ class TestAgentReadiness:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Verify that snowflake connection test without credentials exits 1 with actionable recovery commands."""
+        """Verify that LLM connection test without credentials exits 1 with actionable recovery commands."""
         # Ensure no environment variables or WCM credentials exist
-        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
-        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_PASSWORD", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_USER", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
+        monkeypatch.delenv("DEBUG_ICEPICK_GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
-        with patch("icepick.security.credentials.read_wcm_credential", return_value=None):
-            result = runner.invoke(app, ["config", "test", "--snowflake"])
+        monkeypatch.setattr(
+            "icepick.security.credentials.read_wcm_credential_fn",
+            lambda target: None,
+        )
+        monkeypatch.setattr(
+            "icepick.security.credentials.read_wcm_credential",
+            lambda target: None,
+        )
+        monkeypatch.setattr(
+            "icepick.credentials.read_wcm_credential_fn",
+            lambda target: None,
+        )
+        monkeypatch.setattr(
+            "icepick.credentials.read_wcm_credential",
+            lambda target: None,
+        )
+        result = runner.invoke(app, ["config", "test"])
 
         # Must exit with code 1 (Authentication Error)
         assert result.exit_code == 1
 
         # Actionable instructions must be present in output
         combined_text = result.output + (result.stderr or "")
-        assert "[Authentication Error]" in combined_text
-        assert "snowflake" in combined_text
+        assert "FAIL" in combined_text or "Error" in combined_text
+        assert "llm" in combined_text.lower()
 
         # Verify PowerShell masked credential guidance
-        assert "$cred = Get-Credential" in combined_text
-        assert "cmdkey /generic:icepick:snowflake" in combined_text
+        assert "cmdkey /generic:icepick:gemini_api_key" in combined_text
 
         # Verify debug environment variable fallback guidance
-        assert "$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD=" in combined_text
-        assert "$env:DEBUG_ICEPICK_SNOWFLAKE_USER=" in combined_text
+        assert "$env:DEBUG_ICEPICK_GEMINI_API_KEY=" in combined_text
 
     def test_readiness_enumerated_error_on_invalid_arguments(self, tmp_path: Path) -> None:
         """Verify that invalid arguments yield exit code 1 and display accepted enum choices in stderr."""

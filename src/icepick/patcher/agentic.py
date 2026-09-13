@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 
@@ -19,7 +19,6 @@ from icepick.llm.slicer import ContextSlicer
 if TYPE_CHECKING:
     from icepick.config import Config
     from icepick.linter.base import DiagnosticIssue
-    from icepick.verifier.equivalence import EquivalenceVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ class AgenticPatcher:
         self,
         ast: exp.Expression,
         issue: DiagnosticIssue,
-        verifier: EquivalenceVerifier | None = None,
+        verifier: Any = None,
         orig_sql: str | None = None,
         config: Config | None = None,
         max_retries: int = 3,
@@ -230,7 +229,7 @@ class AgenticPatcher:
         self,
         ast: exp.Expression,
         issue: DiagnosticIssue,
-        verifier: EquivalenceVerifier,
+        verifier: Any,
         orig_sql: str,
         config: Config | None = None,
         max_retries: int = 3,
@@ -240,7 +239,7 @@ class AgenticPatcher:
         Args:
             ast: Root AST Expression.
             issue: DiagnosticIssue requiring LLM rewriting.
-            verifier: EquivalenceVerifier for bidirectional EXCEPT verification.
+            verifier: Verifier object for bidirectional EXCEPT verification.
             orig_sql: Original SQL query text.
             config: Optional Config instance for Snowflake connection.
             max_retries: Maximum retry attempts for self-correction (default: 3).
@@ -261,7 +260,7 @@ class AgenticPatcher:
         self,
         ast: exp.Expression,
         issues: Sequence[DiagnosticIssue],
-        verifier: EquivalenceVerifier | None = None,
+        verifier: Any = None,
         orig_sql: str | None = None,
         config: Config | None = None,
         max_retries: int = 3,

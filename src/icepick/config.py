@@ -139,13 +139,6 @@ class Config:
         gcp_location: GCP location/region when using Vertex AI.
         llm_options: Generic provider-specific options passed to the pluggable LLM provider.
             Supports arbitrary key-value pairs from [llm.options] TOML table or llm_options JSON key.
-        snowflake_account: Snowflake account identifier.
-        snowflake_user: Snowflake username.
-        snowflake_password: Optional Snowflake password.
-        snowflake_database: Default Snowflake database.
-        snowflake_schema: Default Snowflake schema.
-        snowflake_warehouse: Default Snowflake virtual warehouse.
-        snowflake_role: Optional Snowflake role.
     """
 
     dialect: str = "snowflake"
@@ -162,13 +155,6 @@ class Config:
     gcp_project: str | None = None
     gcp_location: str | None = None
     llm_options: dict[str, Any] = field(default_factory=dict)
-    snowflake_account: str | None = None
-    snowflake_user: str | None = None
-    snowflake_password: str | None = None
-    snowflake_database: str | None = None
-    snowflake_schema: str | None = None
-    snowflake_warehouse: str | None = None
-    snowflake_role: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize rule lists and perform basic validation."""
@@ -255,13 +241,6 @@ _ENV_VAR_MAPPING: dict[str, list[str]] = {
     "gemini_api_key": ["DEBUG_ICEPICK_GEMINI_API_KEY"],
     "gcp_project": ["GCP_PROJECT", "GOOGLE_CLOUD_PROJECT"],
     "gcp_location": ["GCP_LOCATION", "GOOGLE_CLOUD_REGION"],
-    "snowflake_account": ["SNOWFLAKE_ACCOUNT"],
-    "snowflake_user": ["DEBUG_ICEPICK_SNOWFLAKE_USER"],
-    "snowflake_password": ["DEBUG_ICEPICK_SNOWFLAKE_PASSWORD"],
-    "snowflake_database": ["SNOWFLAKE_DATABASE"],
-    "snowflake_schema": ["SNOWFLAKE_SCHEMA"],
-    "snowflake_warehouse": ["SNOWFLAKE_WAREHOUSE"],
-    "snowflake_role": ["SNOWFLAKE_ROLE"],
 }
 
 
@@ -272,9 +251,7 @@ class ConfigResolver:
         CLI > ENV > FILE > KEYRING > DEFAULT
     """
 
-    SECRET_KEYS: frozenset[str] = frozenset(
-        {"gemini_api_key", "snowflake_user", "snowflake_password"}
-    )
+    SECRET_KEYS: frozenset[str] = frozenset({"gemini_api_key"})
 
     def __init__(
         self,
@@ -332,7 +309,9 @@ class ConfigResolver:
             return {}
 
         # Support both [icepick] sub-table and top-level configuration
-        config_data = data["icepick"] if "icepick" in data and isinstance(data["icepick"], dict) else data
+        config_data = (
+            data["icepick"] if "icepick" in data and isinstance(data["icepick"], dict) else data
+        )
         if not isinstance(config_data, dict):
             return {}
 
@@ -382,38 +361,6 @@ class ConfigResolver:
 
         return raw_val.strip()
 
-    def _resolve_snowflake_credentials_from_keyring(
-        self,
-    ) -> tuple[str | None, str | None]:
-        """Attempt to resolve Snowflake user and password from Keyring / WCM.
-
-        Returns:
-            tuple[str | None, str | None]: (snowflake_user, snowflake_password)
-        """
-        if not self.use_keyring:
-            return None, None
-
-        user: str | None = None
-        password: str | None = None
-
-        try:
-            from icepick.credentials import read_wcm_credential, read_wcm_credential_pair
-
-            # 1. Primary target: WCM credential pair (Target: icepick:snowflake)
-            pair = read_wcm_credential_pair("icepick:snowflake")
-            if pair is not None:
-                user, password = pair
-
-            # 2. Backward compatibility fallback: single password target (Target: icepick:snowflake_password)
-            if password is None:
-                single_pass = read_wcm_credential("icepick:snowflake_password")
-                if single_pass:
-                    password = single_pass
-        except Exception:  # noqa: BLE001
-            return None, None
-
-        return user, password
-
     def _get_keyring_value(self, key: str) -> str | None:
         """Resolve a sensitive credential from Keyring / WCM."""
         if not self.use_keyring or key not in self.SECRET_KEYS:
@@ -439,12 +386,6 @@ class ConfigResolver:
         summary_items: dict[str, RuntimeConfigItem] = {}
         config_kwargs: dict[str, Any] = {}
 
-        # Pre-resolve snowflake credentials from Keyring / WCM if keyring resolution is active
-        sf_wcm_user: str | None = None
-        sf_wcm_pass: str | None = None
-        if self.use_keyring:
-            sf_wcm_user, sf_wcm_pass = self._resolve_snowflake_credentials_from_keyring()
-
         for f in fields(Config):
             key = f.name
             is_secret = key in self.SECRET_KEYS
@@ -467,12 +408,6 @@ class ConfigResolver:
                 src = ConfigSource.FILE
 
             # 4. Keyring / Windows Credential Manager
-            elif key == "snowflake_user" and sf_wcm_user is not None:
-                val = sf_wcm_user
-                src = ConfigSource.KEYRING
-            elif key == "snowflake_password" and sf_wcm_pass is not None:
-                val = sf_wcm_pass
-                src = ConfigSource.KEYRING
             elif (keyring_val := self._get_keyring_value(key)) is not None:
                 val = keyring_val
                 src = ConfigSource.KEYRING

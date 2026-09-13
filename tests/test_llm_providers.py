@@ -82,11 +82,7 @@ class TestGeminiProvider:
             assert payload["contents"][0]["parts"][0]["text"] == "SELECT 1"
             return httpx.Response(
                 status_code=200,
-                json={
-                    "candidates": [
-                        {"content": {"parts": [{"text": "SELECT 1 AS optimized"}]}}
-                    ]
-                },
+                json={"candidates": [{"content": {"parts": [{"text": "SELECT 1 AS optimized"}]}}]},
             )
 
         transport = httpx.MockTransport(handler)
@@ -106,7 +102,10 @@ class TestGeminiProvider:
 
         assert len(captured_requests) == 1
         req = captured_requests[0]
-        assert req.url == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        assert (
+            req.url
+            == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        )
         assert req.headers["x-goog-api-key"] == "custom-gemini-key"
         assert req.headers["content-type"] == "application/json"
 
@@ -122,9 +121,7 @@ class TestGeminiProvider:
     def test_gemini_provider_missing_credentials_raises_authentication_error(self) -> None:
         """Test that AuthenticationError is raised when key is missing and cannot be resolved."""
         with patch("icepick.llm.providers.gemini.resolve_credential") as mock_resolve:
-            mock_resolve.side_effect = AuthenticationError(
-                "Missing key", key_name="gemini_api_key"
-            )
+            mock_resolve.side_effect = AuthenticationError("Missing key", key_name="gemini_api_key")
 
             provider = GeminiProvider(model="gemini-2.5-flash")
             assert provider.api_key is None
@@ -134,6 +131,7 @@ class TestGeminiProvider:
 
     def test_gemini_provider_health_check_success_and_failure(self) -> None:
         """Test health check round-trip reporting on success and credential failure."""
+
         # 1. Health check success
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -161,9 +159,7 @@ class TestGeminiProvider:
 
         # 2. Health check failure due to missing credentials
         with patch("icepick.llm.providers.gemini.resolve_credential") as mock_resolve:
-            mock_resolve.side_effect = AuthenticationError(
-                "Missing key", key_name="gemini_api_key"
-            )
+            mock_resolve.side_effect = AuthenticationError("Missing key", key_name="gemini_api_key")
             provider_fail = GeminiProvider(model="gemini-2.5-flash")
             fail_status = provider_fail.health_check()
 
@@ -189,6 +185,7 @@ class TestGeminiProvider:
 
     def test_gemini_provider_malformed_response_errors(self) -> None:
         """Test error handling when LLM returns no candidates or parts."""
+
         def handler_empty(request: httpx.Request) -> httpx.Response:
             return httpx.Response(status_code=200, json={"candidates": []})
 
@@ -215,6 +212,7 @@ class TestGeminiProvider:
 
     def test_gemini_provider_multipart_response_parsing(self) -> None:
         """Test aggregating multiple text parts in candidate content for Gemini."""
+
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 status_code=200,
@@ -262,11 +260,7 @@ class TestVertexAIProvider:
             captured_requests.append(request)
             return httpx.Response(
                 status_code=200,
-                json={
-                    "candidates": [
-                        {"content": {"parts": [{"text": "vertex answer"}]}}
-                    ]
-                },
+                json={"candidates": [{"content": {"parts": [{"text": "vertex answer"}]}}]},
             )
 
         transport = httpx.MockTransport(handler)
@@ -284,7 +278,10 @@ class TestVertexAIProvider:
 
             assert len(captured_requests) == 1
             req = captured_requests[0]
-            assert req.url == "https://us-central1-aiplatform.googleapis.com/v1/projects/proj-123/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
+            assert (
+                req.url
+                == "https://us-central1-aiplatform.googleapis.com/v1/projects/proj-123/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
+            )
             assert req.headers["authorization"] == "Bearer mock-bearer-token"
             assert req.headers["content-type"] == "application/json"
 
@@ -319,7 +316,10 @@ class TestVertexAIProvider:
         with patch.object(provider, "_get_token", return_value="tok"):
             provider.generate_text("ping")
             assert len(captured_requests) == 1
-            assert captured_requests[0].url == "https://aiplatform.googleapis.com/v1/projects/global-proj/locations/global/publishers/google/models/gemini-2.5-flash:generateContent"
+            assert (
+                captured_requests[0].url
+                == "https://aiplatform.googleapis.com/v1/projects/global-proj/locations/global/publishers/google/models/gemini-2.5-flash:generateContent"
+            )
 
     def test_vertex_provider_missing_project_error_and_health_check(self) -> None:
         """Test that missing project raises ValueError and produces actionable advice."""
@@ -378,11 +378,7 @@ class TestVertexAIProvider:
             captured_requests.append(request)
             return httpx.Response(
                 status_code=200,
-                json={
-                    "candidates": [
-                        {"content": {"parts": [{"text": "SELECT 1"}]}}
-                    ]
-                },
+                json={"candidates": [{"content": {"parts": [{"text": "SELECT 1"}]}}]},
             )
 
         transport = httpx.MockTransport(handler)
@@ -407,6 +403,7 @@ class TestVertexAIProvider:
 
     def test_vertex_provider_multipart_response_parsing(self) -> None:
         """Test aggregating multiple text parts in candidate content into a single string."""
+
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 status_code=200,
@@ -440,6 +437,7 @@ class TestVertexAIProvider:
 
     def test_vertex_provider_thought_and_text_parts(self) -> None:
         """Test extraction across thought and text blocks, and error on empty response."""
+
         # 1. Thought block + code block extraction
         def handler_thought(request: httpx.Request) -> httpx.Response:
             return httpx.Response(

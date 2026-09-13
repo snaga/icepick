@@ -866,22 +866,6 @@ def config_show(
 
 @config_app.command("test")
 def test_config(
-    target: str = typer.Option(
-        "all",
-        "--target",
-        "-t",
-        help="Target service to test ('all', 'llm', 'snowflake').",
-    ),
-    llm_only: bool = typer.Option(
-        False,
-        "--llm",
-        help="Test LLM connection only.",
-    ),
-    snowflake_only: bool = typer.Option(
-        False,
-        "--snowflake",
-        help="Test Snowflake connection only.",
-    ),
     provider: str | None = typer.Option(
         None,
         "--provider",
@@ -897,7 +881,7 @@ def test_config(
     timeout: float = typer.Option(
         10.0,
         "--timeout",
-        help="Timeout in seconds for each connection check.",
+        help="Timeout in seconds for connection check.",
     ),
     config: Path | None = typer.Option(
         None,
@@ -911,33 +895,7 @@ def test_config(
         help="Output health report as structured JSON.",
     ),
 ) -> None:
-    """Test connectivity, latency, and authentication for LLM and Snowflake services."""
-    # Resolve target services to test
-    # Specific flags (--llm, --snowflake) take precedence over general --target option
-    if llm_only and snowflake_only:
-        targets = ["llm", "snowflake"]
-    elif llm_only:
-        targets = ["llm"]
-    elif snowflake_only:
-        targets = ["snowflake"]
-    else:
-        normalized_target = target.strip().lower()
-        if normalized_target == "all":
-            targets = ["llm", "snowflake"]
-        elif normalized_target == "llm":
-            targets = ["llm"]
-        elif normalized_target == "snowflake":
-            targets = ["snowflake"]
-        else:
-            err_console.print(
-                f"[bold red]Error:[/bold red] Invalid target '{target}'. "
-                "Valid targets are 'all', 'llm', 'snowflake'."
-            )
-            err_console.print(
-                "[yellow]Actionable Advice:[/yellow] Specify one of 'all', 'llm', or 'snowflake' for --target."
-            )
-            raise typer.Exit(code=1)
-
+    """Test connectivity, latency, and authentication for LLM services."""
     cli_args: dict[str, Any] = {}
     if provider is not None:
         cli_args["llm_provider"] = provider
@@ -951,7 +909,7 @@ def test_config(
         raise typer.Exit(code=1) from exc
 
     tester = ConnectionTester()
-    report = tester.test_all(cfg=cfg, targets=targets, timeout=timeout)
+    report = tester.test_all(cfg=cfg, timeout=timeout)
 
     if json_output:
         typer.echo(json.dumps(report.to_dict(), indent=2))

@@ -119,11 +119,7 @@ class LLMClient:
             merged["api_key"] = resolved_api_key
 
         #    project / location: Vertex AI (also exposed as backward-compat instance attrs)
-        resolved_project: str | None = (
-            project
-            or cfg.gcp_project
-            or merged.get("project")
-        )
+        resolved_project: str | None = project or cfg.gcp_project or merged.get("project")
         if resolved_project:
             merged["project"] = resolved_project
 

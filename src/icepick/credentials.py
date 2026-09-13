@@ -9,27 +9,18 @@ from icepick.security.credentials import (
     AuthenticationError,
     decode_credential_blob,
     format_actionable_error,
-    format_actionable_pair_error,
     format_actionable_provider_guidance,
     read_wcm_credential,
     read_wcm_credential_fn,
-    read_wcm_credential_pair,
-    read_wcm_credential_pair_fn,
     resolve_credential,
-    resolve_credential_pair,
 )
 
 __all__ = [
     "AuthenticationError",
     "decode_credential_blob",
     "format_actionable_error",
-    "format_actionable_pair_error",
     "format_actionable_provider_guidance",
     "read_wcm_credential",
     "read_wcm_credential_fn",
-    "read_wcm_credential_pair",
-    "read_wcm_credential_pair_fn",
     "resolve_credential",
-    "resolve_credential_pair",
 ]
-

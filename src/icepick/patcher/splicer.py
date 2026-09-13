@@ -225,9 +225,7 @@ def _resolve_deletion_span(
 
     left_text = original_sql[line_start:match_start]
     right_text = (
-        original_sql[match_end:line_end]
-        if has_trailing_newline
-        else original_sql[match_end:]
+        original_sql[match_end:line_end] if has_trailing_newline else original_sql[match_end:]
     )
 
     left_empty = left_text.strip() == ""
@@ -471,9 +469,7 @@ class TextSplicer:
         current_sql = original_sql
         applied_ids: set[int] = set()
         for cand in candidates:
-            current_sql = (
-                current_sql[: cand.start] + cand.replacement + current_sql[cand.end :]
-            )
+            current_sql = current_sql[: cand.start] + cand.replacement + current_sql[cand.end :]
             applied_ids.add(id(cand.issue))
 
         # Return applied issues maintaining the caller's original sequence order
