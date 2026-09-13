@@ -54,11 +54,11 @@ class TestAgentReadiness:
         sql_content = "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub\n"
         sql_file.write_text(sql_content, encoding="utf-8")
 
-        # 1. Test patch --interactive with empty/EOF stdin stream
+        # 1. Test fix without --force with empty/EOF stdin stream
         t_start = time.perf_counter()
         with patch("sys.stdin", io.StringIO("")):
-            result_interactive = runner.invoke(
-                app, ["patch", str(sql_file), "--interactive"], input=""
+            result_fix = runner.invoke(
+                app, ["fix", str(sql_file)], input=""
             )
         elapsed = time.perf_counter() - t_start
 
@@ -66,67 +66,49 @@ class TestAgentReadiness:
         assert elapsed < 2.0, (
             f"Command execution took too long ({elapsed:.2f}s), possible hang on stdin"
         )
-        assert result_interactive.exit_code in (0, 1)
+        assert result_fix.exit_code in (0, 1)
 
-        # 2. Test rewrite batch execution with non-interactive stdin
+        # 2. Test diff execution with non-interactive stdin
         t_start = time.perf_counter()
         with patch("sys.stdin", io.StringIO("")):
-            result_batch = runner.invoke(app, ["rewrite", str(sql_file)], input="")
-        elapsed_batch = time.perf_counter() - t_start
+            result_diff = runner.invoke(app, ["diff", str(sql_file)], input="")
+        elapsed_diff = time.perf_counter() - t_start
 
-        assert elapsed_batch < 2.0, f"Batch rewrite took too long ({elapsed_batch:.2f}s)"
-        assert result_batch.exit_code == 0
+        assert elapsed_diff < 2.0, f"Diff took too long ({elapsed_diff:.2f}s)"
+        assert result_diff.exit_code == 0
 
-        # 3. Test check with non-interactive stdin
+        # 3. Test diag with non-interactive stdin
         t_start = time.perf_counter()
         with patch("sys.stdin", io.StringIO("")):
-            result_check = runner.invoke(app, ["check", str(sql_file)], input="")
-        elapsed_check = time.perf_counter() - t_start
+            result_diag = runner.invoke(app, ["diag", str(sql_file)], input="")
+        elapsed_diag = time.perf_counter() - t_start
 
-        assert elapsed_check < 2.0, f"Check took too long ({elapsed_check:.2f}s)"
-        assert result_check.exit_code in (0, 1)
+        assert elapsed_diag < 2.0, f"Diag took too long ({elapsed_diag:.2f}s)"
+        assert result_diag.exit_code in (0, 1)
 
     def test_readiness_all_commands_json_parseable(self, tmp_path: Path) -> None:
         """Verify that all commands with --json output clean, ANSI-free, parseable JSON on stdout."""
-        # 1. check --json with detected issues
+        # 1. diag --json with detected issues
         dirty_sql = tmp_path / "issues.sql"
         dirty_sql_content = "SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub WHERE DATE(created_at) = '2023-01-01'"
         dirty_sql.write_text(normalize_sql(dirty_sql_content), encoding="utf-8")
-        res_check_issues = runner.invoke(app, ["check", str(dirty_sql), "--json"])
-        assert res_check_issues.exit_code == 1
-        data_check_issues = _assert_valid_json_and_no_ansi(res_check_issues.stdout)
-        assert isinstance(data_check_issues, list)
-        assert len(data_check_issues) >= 2
-        assert any(item["rule_id"] == "SNOW-001" for item in data_check_issues)
-        assert any(item["rule_id"] == "SNOW-003" for item in data_check_issues)
+        res_diag_issues = runner.invoke(app, ["diag", str(dirty_sql), "--json"])
+        assert res_diag_issues.exit_code == 1
+        data_diag_issues = _assert_valid_json_and_no_ansi(res_diag_issues.stdout)
+        assert isinstance(data_diag_issues, dict)
+        assert data_diag_issues["issues_count"] >= 2
+        assert any(item["rule_id"] == "SNOW-001" for item in data_diag_issues["prescriptions"])
+        assert any(item["rule_id"] == "SNOW-003" for item in data_diag_issues["prescriptions"])
 
-        # 2. check --json with clean SQL
+        # 2. diag --json with clean SQL
         clean_sql = tmp_path / "clean.sql"
         clean_sql.write_text("SELECT id, name FROM tbl WHERE id = 1", encoding="utf-8")
-        res_check_clean = runner.invoke(app, ["check", str(clean_sql), "--json"])
-        assert res_check_clean.exit_code == 0
-        data_check_clean = _assert_valid_json_and_no_ansi(res_check_clean.stdout)
-        assert isinstance(data_check_clean, list)
-        assert len(data_check_clean) == 0
-
-        # 3. rewrite --json and patch --json (--dry-run)
-        res_rewrite = runner.invoke(app, ["rewrite", str(dirty_sql), "--json"])
-        assert res_rewrite.exit_code == 0
-        data_rewrite = _assert_valid_json_and_no_ansi(res_rewrite.stdout)
-        assert isinstance(data_rewrite, dict)
-        assert data_rewrite["file"] == str(dirty_sql)
-        assert data_rewrite["has_changes"] is True
-        assert len(data_rewrite["diff"]) > 0
-
-        patch_file = tmp_path / "readiness.patch"
-        patch_file.write_text(data_rewrite["diff"], encoding="utf-8")
-        res_patch = runner.invoke(
-            app, ["patch", str(dirty_sql), str(patch_file), "--dry-run", "--json"]
-        )
-        assert res_patch.exit_code == 0
-        data_patch = _assert_valid_json_and_no_ansi(res_patch.stdout)
-        assert isinstance(data_patch, dict)
-        assert data_patch["status"] == "dry_run"
+        res_diag_clean = runner.invoke(app, ["diag", str(clean_sql), "--json"])
+        assert res_diag_clean.exit_code == 0
+        data_diag_clean = _assert_valid_json_and_no_ansi(res_diag_clean.stdout)
+        assert isinstance(data_diag_clean, dict)
+        assert data_diag_clean["issues_count"] == 0
+        assert len(data_diag_clean["prescriptions"]) == 0
 
         # 4. feedback --json
         feedback_log = tmp_path / "readiness_feedback.jsonl"
@@ -201,9 +183,9 @@ class TestAgentReadiness:
         """Verify that all commands and subcommands produce valid help messages and exit 0."""
         commands_to_test = [
             ["--help"],
-            ["check", "--help"],
-            ["rewrite", "--help"],
-            ["patch", "--help"],
+            ["diag", "--help"],
+            ["diff", "--help"],
+            ["fix", "--help"],
             ["verify", "--help"],
             ["feedback", "--help"],
             ["agent-context", "--help"],
@@ -267,23 +249,31 @@ class TestAgentReadiness:
         sql_file = tmp_path / "dummy.sql"
         sql_file.write_text("SELECT 1", encoding="utf-8")
 
-        # 1. Invalid dialect in 'check' command
-        res_check_bad_dialect = runner.invoke(
-            app, ["check", str(sql_file), "--dialect", "unsupported_dialect"]
+        # 1. Invalid dialect in 'diag' command
+        res_diag_bad_dialect = runner.invoke(
+            app, ["diag", str(sql_file), "--dialect", "unsupported_dialect"]
         )
-        assert res_check_bad_dialect.exit_code == 1
+        assert res_diag_bad_dialect.exit_code == 1
         for dialect in VALID_DIALECTS:
-            assert f"'{dialect}'" in res_check_bad_dialect.stderr
+            assert f"'{dialect}'" in res_diag_bad_dialect.stderr
 
-        # 2. Invalid dialect in 'rewrite' command
-        res_rewrite_bad_dialect = runner.invoke(
-            app, ["rewrite", str(sql_file), "--dialect", "unsupported_dialect"]
+        # 2. Invalid dialect in 'diff' command
+        res_diff_bad_dialect = runner.invoke(
+            app, ["diff", str(sql_file), "--dialect", "unsupported_dialect"]
         )
-        assert res_rewrite_bad_dialect.exit_code == 1
+        assert res_diff_bad_dialect.exit_code == 1
         for dialect in VALID_DIALECTS:
-            assert f"'{dialect}'" in res_rewrite_bad_dialect.stderr
+            assert f"'{dialect}'" in res_diff_bad_dialect.stderr
 
-        # 3. Invalid dialect in 'verify' command
+        # 3. Invalid dialect in 'fix' command
+        res_fix_bad_dialect = runner.invoke(
+            app, ["fix", str(sql_file), "--force", "--dialect", "unsupported_dialect"]
+        )
+        assert res_fix_bad_dialect.exit_code == 1
+        for dialect in VALID_DIALECTS:
+            assert f"'{dialect}'" in res_fix_bad_dialect.stderr
+
+        # 4. Invalid dialect in 'verify' command
         res_verify_bad_dialect = runner.invoke(
             app,
             ["verify", str(sql_file), str(sql_file), "--dialect", "unsupported_dialect"],
@@ -292,7 +282,7 @@ class TestAgentReadiness:
         for dialect in VALID_DIALECTS:
             assert f"'{dialect}'" in res_verify_bad_dialect.stderr
 
-        # 4. Invalid category in 'feedback' command
+        # 5. Invalid category in 'feedback' command
         res_bad_category = runner.invoke(
             app, ["feedback", "Friction note", "--category", "invalid_category"]
         )
@@ -306,33 +296,24 @@ class TestAgentReadiness:
         original_sql = normalize_sql("SELECT * FROM (SELECT id FROM tbl ORDER BY id) AS sub\n")
         sql_file.write_text(original_sql, encoding="utf-8")
 
-        # Generate a patch via rewrite
-        res_rewrite = runner.invoke(
-            app, ["rewrite", str(sql_file), "--output", str(tmp_path / "test.patch")]
-        )
-        assert res_rewrite.exit_code == 0
-        patch_file = tmp_path / "test.patch"
-        assert patch_file.exists()
-
-        # 1. Attempt patch without --force in non-interactive environment (sys.stdin.isatty() is False)
+        # 1. Attempt fix without --force in non-interactive environment (sys.stdin.isatty() is False)
         with patch("sys.stdin.isatty", return_value=False):
-            res_patch_no_force = runner.invoke(app, ["patch", str(sql_file), str(patch_file)])
+            res_fix_no_force = runner.invoke(app, ["fix", str(sql_file)])
 
-        assert res_patch_no_force.exit_code == 1
+        assert res_fix_no_force.exit_code == 1
         assert (
-            "error: Overwriting files in non-interactive environment requires --force flag"
-            in res_patch_no_force.stderr
+            "non-interactive environment detected without --force"
+            in (res_fix_no_force.output + res_fix_no_force.stderr).lower()
         )
         # File must remain completely untouched
         assert sql_file.read_text(encoding="utf-8") == original_sql
 
-        # 2. Attempt patch with --dry-run (simulation only)
+        # 2. Attempt fix with --dry-run (simulation only)
         res_dry_run = runner.invoke(
             app,
             [
-                "patch",
+                "fix",
                 str(sql_file),
-                str(patch_file),
                 "--dry-run",
             ],
         )
@@ -342,11 +323,11 @@ class TestAgentReadiness:
 
         # 3. Contrast check: Explicit --force safely applies changes
         with patch("sys.stdin.isatty", return_value=False):
-            res_patch_force = runner.invoke(
-                app, ["patch", str(sql_file), str(patch_file), "--force"]
+            res_fix_force = runner.invoke(
+                app, ["fix", str(sql_file), "--force"]
             )
 
-        assert res_patch_force.exit_code == 0
+        assert res_fix_force.exit_code == 0
         modified_sql = sql_file.read_text(encoding="utf-8")
         assert modified_sql != original_sql
         assert "ORDER BY" not in modified_sql

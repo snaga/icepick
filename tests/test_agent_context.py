@@ -39,28 +39,24 @@ class TestAgentContextUnit:
         ctx = get_agent_context()
         commands = ctx["commands"]
         expected_commands = {
-            "check",
             "diag",
             "diff",
             "fix",
-            "rewrite",
-            "patch",
             "verify",
             "feedback",
             "agent-context",
             "config",
         }
-        assert expected_commands.issubset(commands.keys())
+        assert set(commands.keys()) == expected_commands
+        assert "check" not in commands
+        assert "rewrite" not in commands
+        assert "patch" not in commands
 
         for cmd_name in expected_commands:
             cmd_info = commands[cmd_name]
             assert "description" in cmd_info
             assert "arguments" in cmd_info
             assert "options" in cmd_info
-
-        # Check argument for 'check'
-        assert "file" in commands["check"]["arguments"]
-        assert commands["check"]["arguments"]["file"]["required"] is True
 
         # Check arguments and options for 'diag'
         assert "file" in commands["diag"]["arguments"]
@@ -101,21 +97,14 @@ class TestAgentContextUnit:
         assert "--dialect" in fix_opts
         assert "--config" in fix_opts
 
-        # Check options for 'rewrite'
-        rewrite_opts = commands["rewrite"]["options"]
-        assert "--output" in rewrite_opts
-        assert "--category" in rewrite_opts
-        assert "--agentic" in rewrite_opts
-        assert rewrite_opts["--agentic"]["type"] == "bool"
-        assert "--flatten-subqueries" in rewrite_opts
-        assert "--reformat" in rewrite_opts
-        assert rewrite_opts["--reformat"]["type"] == "bool"
-        assert "--json" in rewrite_opts
-        assert "--provider" in rewrite_opts
-        assert rewrite_opts["--provider"]["choices"] == ["gemini", "vertex"]
-        assert "--model" in rewrite_opts
-        assert "--verify-loop" not in rewrite_opts
-        assert "--max-retries" not in rewrite_opts
+        # Check arguments and options for 'feedback'
+        assert "message" in commands["feedback"]["arguments"]
+        assert commands["feedback"]["arguments"]["message"]["required"] is True
+        feedback_opts = commands["feedback"]["options"]
+        assert "--category" in feedback_opts
+        assert feedback_opts["--category"]["choices"] == ["friction", "bug", "doc", "idea"]
+        assert "--log-file" in feedback_opts
+        assert "--json" in feedback_opts
 
         # Check 'config' command and subcommands
         config_cmd = commands["config"]
@@ -137,13 +126,6 @@ class TestAgentContextUnit:
         assert "--config" in test_sub["options"]
         assert "--json" in test_sub["options"]
 
-        # Check options for 'patch'
-        patch_opts = commands["patch"]["options"]
-        assert "--interactive" in patch_opts
-        assert "--dry-run" in patch_opts
-        assert "--force" in patch_opts
-        assert "--json" in patch_opts
-
         # Check options for 'verify'
         verify_opts = commands["verify"]["options"]
         assert "--output" in verify_opts
@@ -159,10 +141,9 @@ class TestAgentContextUnit:
 
         # Check --dialect choices
         expected_dialects = ["snowflake", "postgres", "duckdb", "bigquery"]
-        assert commands["check"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["diag"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["diff"]["options"]["--dialect"]["choices"] == expected_dialects
-        assert commands["rewrite"]["options"]["--dialect"]["choices"] == expected_dialects
+        assert commands["fix"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["verify"]["options"]["--dialect"]["choices"] == expected_dialects
 
     def test_rules_coverage(self) -> None:
