@@ -36,6 +36,73 @@ class VerificationResult:
     error_message: str | None = None
 
 
+def generate_verification_sql(
+    orig_sql: str,
+    opt_sql: str,
+    count_only: bool = False,
+    dialect: str = "snowflake",
+) -> str:
+    """Generate a bidirectional EXCEPT verification SQL query.
+
+    Constructs a deterministic SQL query comparing the result sets of orig_sql and opt_sql
+    in both directions (orig EXCEPT opt and opt EXCEPT orig). Returns 0 rows (or count 0)
+    if and only if both queries are semantically equivalent.
+
+    Args:
+        orig_sql: Original SQL query text.
+        opt_sql: Optimized SQL query text.
+        count_only: If True, aggregates difference count into a count query.
+            If False, produces actual row differences with diff_type metadata.
+        dialect: Target SQL dialect (default: "snowflake"). Reserved for future dialect-specific features.
+
+    Returns:
+        str: Generated bidirectional EXCEPT verification SQL query.
+    """
+    clean_orig = orig_sql.strip()
+    while clean_orig.endswith(";"):
+        clean_orig = clean_orig[:-1].strip()
+
+    clean_opt = opt_sql.strip()
+    while clean_opt.endswith(";"):
+        clean_opt = clean_opt[:-1].strip()
+
+    if count_only:
+        return (
+            "-- Icepick Equivalence Verification Count Query\n"
+            "WITH orig AS (\n"
+            f"{clean_orig}\n"
+            "),\n"
+            "opt AS (\n"
+            f"{clean_opt}\n"
+            ")\n"
+            "SELECT 'orig_not_in_opt' AS diff_type, COUNT(*) AS cnt FROM (\n"
+            "  SELECT * FROM orig EXCEPT SELECT * FROM opt\n"
+            ")\n"
+            "UNION ALL\n"
+            "SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (\n"
+            "  SELECT * FROM opt EXCEPT SELECT * FROM orig\n"
+            ");"
+        )
+
+    return (
+        "-- Icepick Equivalence Verification Query\n"
+        "-- Returns 0 rows if both queries are semantically equivalent.\n"
+        "WITH orig AS (\n"
+        f"{clean_orig}\n"
+        "),\n"
+        "opt AS (\n"
+        f"{clean_opt}\n"
+        ")\n"
+        "SELECT 'orig_not_in_opt' AS diff_type, * FROM (\n"
+        "  SELECT * FROM orig EXCEPT SELECT * FROM opt\n"
+        ")\n"
+        "UNION ALL\n"
+        "SELECT 'opt_not_in_orig' AS diff_type, * FROM (\n"
+        "  SELECT * FROM opt EXCEPT SELECT * FROM orig\n"
+        ");"
+    )
+
+
 class EquivalenceVerifier:
     """Mathematical equivalence verification engine using bidirectional EXCEPT operations."""
 
@@ -47,39 +114,55 @@ class EquivalenceVerifier:
         """
         self.dialect = dialect
 
-    def build_verification_query(
+    def generate_sql(
         self,
         orig_sql: str,
         opt_sql: str,
-        dialect: str | None = None,
+        count_only: bool = False,
     ) -> str:
-        """Dynamically construct a bidirectional EXCEPT verification SQL query.
+        """Generate a bidirectional EXCEPT verification SQL query.
 
         Args:
             orig_sql: Original SQL query text.
             opt_sql: Optimized SQL query text.
+            count_only: If True, aggregates difference count. If False, returns actual difference rows.
+
+        Returns:
+            str: Generated verification SQL query.
+        """
+        return generate_verification_sql(
+            orig_sql,
+            opt_sql,
+            count_only=count_only,
+            dialect=self.dialect,
+        )
+
+    def build_verification_query(
+        self,
+        orig_sql: str,
+        opt_sql: str,
+        count_only: bool = False,
+        dialect: str | None = None,
+    ) -> str:
+        """Dynamically construct a bidirectional EXCEPT verification SQL query.
+
+        Backward-compatibility alias for generate_sql.
+
+        Args:
+            orig_sql: Original SQL query text.
+            opt_sql: Optimized SQL query text.
+            count_only: If True, aggregates difference count. If False, returns actual difference rows.
             dialect: Optional dialect override.
 
         Returns:
             str: Generated verification SQL query.
         """
-        clean_orig = orig_sql.strip().rstrip(";")
-        clean_opt = opt_sql.strip().rstrip(";")
-
-        return (
-            "WITH orig AS (\n"
-            f"{clean_orig}\n"
-            "),\n"
-            "opt AS (\n"
-            f"{clean_opt}\n"
-            ")\n"
-            "SELECT 'orig_not_in_opt' AS diff_type, COUNT(*) AS cnt FROM ("
-            "SELECT * FROM orig EXCEPT SELECT * FROM opt"
-            ")\n"
-            "UNION ALL\n"
-            "SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM ("
-            "SELECT * FROM opt EXCEPT SELECT * FROM orig"
-            ");"
+        target_dialect = dialect or self.dialect
+        return generate_verification_sql(
+            orig_sql,
+            opt_sql,
+            count_only=count_only,
+            dialect=target_dialect,
         )
 
     def verify(
@@ -101,7 +184,9 @@ class EquivalenceVerifier:
             VerificationResult: Detailed verification metrics and equivalence verdict.
         """
         target_dialect = dialect or self.dialect
-        sql = self.build_verification_query(orig_sql, opt_sql, dialect=target_dialect)
+        sql = self.build_verification_query(
+            orig_sql, opt_sql, count_only=True, dialect=target_dialect
+        )
 
         try:
             if hasattr(connection, "cursor") and callable(connection.cursor):
@@ -186,7 +271,9 @@ class EquivalenceVerifier:
             VerificationResult: Verification verdict, difference counts, and error message if any.
         """
         target_dialect = dialect or self.dialect
-        sql = self.build_verification_query(orig_sql, opt_sql, dialect=target_dialect)
+        sql = self.build_verification_query(
+            orig_sql, opt_sql, count_only=True, dialect=target_dialect
+        )
 
         cfg = config or Config.from_env()
 

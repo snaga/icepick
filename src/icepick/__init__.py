@@ -21,7 +21,11 @@ from icepick.linter import BaseRule, DiagnosticIssue, LinterEngine, Severity
 from icepick.llm import ContextSlicer, LLMClient, SliceContext
 from icepick.parser import SQLParser, parse_snowflake_sql
 from icepick.patcher import ASTPatcher, SubqueryToCTE
-from icepick.verifier import EquivalenceVerifier, VerificationResult
+from icepick.verifier import (
+    EquivalenceVerifier,
+    VerificationResult,
+    generate_verification_sql,
+)
 
 __all__ = [
     "ASTPatcher",
@@ -47,6 +51,7 @@ __all__ = [
     "VerificationResult",
     "__version__",
     "app",
+    "generate_verification_sql",
     "get_agent_context",
     "mask_sensitive",
     "parse_snowflake_sql",

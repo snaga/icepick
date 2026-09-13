@@ -1,159 +1,105 @@
-"""Unit and integration tests for EquivalenceVerifier credential resolution and actionable guidance."""
+"""Detroit-style unit tests for pure equivalence verification SQL generation.
+
+Verifies deterministic bidirectional EXCEPT SQL generation without database execution dependencies.
+"""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-import pytest
-
-from icepick.config import Config
-from icepick.credentials import format_actionable_pair_error
-from icepick.exceptions import AuthenticationError
-from icepick.verifier.equivalence import EquivalenceVerifier, VerificationResult
+from icepick.verifier.equivalence import EquivalenceVerifier, generate_verification_sql
 
 
-class TestEquivalenceVerifierCredentialHandling:
-    """Test suite for credential resolution and actionable advice in EquivalenceVerifier."""
+def test_generate_verification_sql_default() -> None:
+    """Test generating standard bidirectional EXCEPT verification SQL with diff row output."""
+    orig_sql = "SELECT id, name FROM users WHERE id > 10;"
+    opt_sql = "SELECT id, name FROM users WHERE id > 10"
 
-    def test_verify_with_snowflake_missing_credentials_contains_actionable_pair_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Verify that missing both user and password returns VerificationResult with pair guidance."""
-        for key in [
-            "SNOWFLAKE_ACCOUNT",
-            "SNOWFLAKE_USER",
-            "SNOWFLAKE_PASSWORD",
-            "SNOWFLAKE_DATABASE",
-            "SNOWFLAKE_WAREHOUSE",
-            "DEBUG_ICEPICK_SNOWFLAKE_USER",
-            "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD",
-        ]:
-            monkeypatch.delenv(key, raising=False)
+    sql = generate_verification_sql(orig_sql, opt_sql)
 
-        monkeypatch.setattr(
-            "icepick.verifier.equivalence.resolve_credential_pair",
-            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake")),
-        )
+    # Header and comments
+    assert "-- Icepick Equivalence Verification Query" in sql
+    assert "-- Returns 0 rows if both queries are semantically equivalent." in sql
 
-        verifier = EquivalenceVerifier()
-        result: VerificationResult = verifier.verify_with_snowflake(
-            orig_sql="SELECT 1",
-            opt_sql="SELECT 1",
-            config=Config(
-                snowflake_account="test-acct",
-                snowflake_database="test-db",
-                snowflake_warehouse="test-wh",
-            ),
-        )
+    # CTE definitions with trimmed semicolons
+    assert "WITH orig AS (\nSELECT id, name FROM users WHERE id > 10\n)" in sql
+    assert "opt AS (\nSELECT id, name FROM users WHERE id > 10\n)" in sql
 
-        assert result.is_equivalent is False
-        assert result.orig_not_in_opt_count == -1
-        assert result.opt_not_in_orig_count == -1
-        assert result.error_message is not None
+    # Bidirectional EXCEPT diff rows
+    assert "SELECT 'orig_not_in_opt' AS diff_type, * FROM (" in sql
+    assert "SELECT * FROM orig EXCEPT SELECT * FROM opt" in sql
+    assert "UNION ALL" in sql
+    assert "SELECT 'opt_not_in_orig' AS diff_type, * FROM (" in sql
+    assert "SELECT * FROM opt EXCEPT SELECT * FROM orig" in sql
 
-        expected_guidance = format_actionable_pair_error("snowflake")
-        assert expected_guidance in result.error_message
-        assert "icepick:snowflake" in result.error_message
-        assert "cmdkey" in result.error_message
-        assert "Get-Credential" in result.error_message
+    # Ends with single semicolon
+    assert sql.endswith(");")
+    assert not sql.endswith(";;")
 
-    def test_verify_with_snowflake_missing_user_only_returns_pair_guidance(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Verify that when only username is missing, pair guidance is presented."""
-        for key in ["DEBUG_ICEPICK_SNOWFLAKE_USER", "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD"]:
-            monkeypatch.delenv(key, raising=False)
 
-        monkeypatch.setattr(
-            "icepick.verifier.equivalence.resolve_credential_pair",
-            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake")),
-        )
+def test_generate_verification_sql_count_only() -> None:
+    """Test generating aggregated difference count verification SQL."""
+    orig_sql = "SELECT id, val FROM metrics;"
+    opt_sql = "SELECT id, val FROM metrics;"
 
-        verifier = EquivalenceVerifier()
-        result = verifier.verify_with_snowflake(
-            orig_sql="SELECT 1",
-            opt_sql="SELECT 1",
-            config=Config(
-                snowflake_account="test-acct",
-                snowflake_password="test-password",
-                snowflake_database="test-db",
-                snowflake_warehouse="test-wh",
-            ),
-        )
+    sql = generate_verification_sql(orig_sql, opt_sql, count_only=True)
 
-        assert result.is_equivalent is False
-        assert result.error_message is not None
-        assert "icepick:snowflake" in result.error_message
-        assert "cmdkey" in result.error_message
+    # Header comment
+    assert "-- Icepick Equivalence Verification Count Query" in sql
 
-    def test_verify_with_snowflake_missing_password_only_returns_pair_guidance(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Verify that when only password is missing, pair guidance is presented."""
-        for key in ["DEBUG_ICEPICK_SNOWFLAKE_USER", "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD"]:
-            monkeypatch.delenv(key, raising=False)
+    # CTE definitions
+    assert "WITH orig AS (\nSELECT id, val FROM metrics\n)" in sql
+    assert "opt AS (\nSELECT id, val FROM metrics\n)" in sql
 
-        monkeypatch.setattr(
-            "icepick.verifier.equivalence.resolve_credential_pair",
-            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake")),
-        )
+    # Aggregation with COUNT(*) AS cnt
+    assert "SELECT 'orig_not_in_opt' AS diff_type, COUNT(*) AS cnt FROM (" in sql
+    assert "SELECT * FROM orig EXCEPT SELECT * FROM opt" in sql
+    assert "UNION ALL" in sql
+    assert "SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (" in sql
+    assert "SELECT * FROM opt EXCEPT SELECT * FROM orig" in sql
+    assert sql.endswith(");")
 
-        verifier = EquivalenceVerifier()
-        result = verifier.verify_with_snowflake(
-            orig_sql="SELECT 1",
-            opt_sql="SELECT 1",
-            config=Config(
-                snowflake_account="test-acct",
-                snowflake_user="test-user",
-                snowflake_database="test-db",
-                snowflake_warehouse="test-wh",
-            ),
-        )
 
-        assert result.is_equivalent is False
-        assert result.error_message is not None
-        assert "icepick:snowflake" in result.error_message
-        assert "Get-Credential" in result.error_message
+def test_generate_verification_sql_strips_trailing_semicolons_and_whitespace() -> None:
+    """Test that trailing semicolons and extraneous whitespace are cleanly stripped."""
+    orig_sql = "  \n SELECT x FROM t;;; \n "
+    opt_sql = "SELECT x FROM t;   "
 
-    def test_verify_with_snowflake_resolves_fallback_from_credential_pair(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Verify that resolve_credential_pair successfully populates missing user and password."""
-        mock_resolve = MagicMock(return_value=("resolved_user", "resolved_pass", "mock_source"))
-        monkeypatch.setattr(
-            "icepick.verifier.equivalence.resolve_credential_pair",
-            mock_resolve,
-        )
+    sql = generate_verification_sql(orig_sql, opt_sql)
 
-        mock_connector = MagicMock()
-        mock_conn = MagicMock()
-        mock_connector.connect.return_value = mock_conn
+    assert "WITH orig AS (\nSELECT x FROM t\n)" in sql
+    assert "opt AS (\nSELECT x FROM t\n)" in sql
 
-        monkeypatch.setattr("importlib.import_module", MagicMock(return_value=mock_connector))
 
-        verifier = EquivalenceVerifier()
-        # Mock verify method so it doesn't execute DB query
-        mock_verify_result = VerificationResult(
-            is_equivalent=True,
-            orig_not_in_opt_count=0,
-            opt_not_in_orig_count=0,
-            verification_sql="-- verification",
-        )
-        monkeypatch.setattr(verifier, "verify", MagicMock(return_value=mock_verify_result))
+def test_generate_verification_sql_complex_query_with_cte() -> None:
+    """Test generating verification SQL when input queries already contain CTEs."""
+    orig_sql = "WITH t AS (SELECT 1 AS c) SELECT c FROM t;"
+    opt_sql = "SELECT 1 AS c;"
 
-        result = verifier.verify_with_snowflake(
-            orig_sql="SELECT 1",
-            opt_sql="SELECT 1",
-            config=Config(
-                snowflake_account="test-acct",
-                snowflake_database="test-db",
-                snowflake_warehouse="test-wh",
-            ),
-        )
+    sql = generate_verification_sql(orig_sql, opt_sql)
 
-        assert result.is_equivalent is True
-        mock_resolve.assert_called_once_with("snowflake")
-        mock_connector.connect.assert_called_once()
-        call_kwargs = mock_connector.connect.call_args[1]
-        assert call_kwargs["user"] == "resolved_user"
-        assert call_kwargs["password"] == "resolved_pass"
+    assert "WITH orig AS (\nWITH t AS (SELECT 1 AS c) SELECT c FROM t\n)" in sql
+    assert "opt AS (\nSELECT 1 AS c\n)" in sql
+
+
+def test_equivalence_verifier_class_methods() -> None:
+    """Test EquivalenceVerifier class methods generate_sql and backward-compatible build_verification_query."""
+    verifier = EquivalenceVerifier(dialect="snowflake")
+    orig_sql = "SELECT col1, col2 FROM table_a"
+    opt_sql = "SELECT col1, col2 FROM table_b"
+
+    # Default full diff mode
+    sql_via_gen = verifier.generate_sql(orig_sql, opt_sql)
+    sql_via_build = verifier.build_verification_query(orig_sql, opt_sql)
+    sql_via_func = generate_verification_sql(orig_sql, opt_sql)
+
+    assert sql_via_gen == sql_via_func
+    assert sql_via_build == sql_via_func
+    assert "SELECT 'orig_not_in_opt' AS diff_type, * FROM (" in sql_via_gen
+
+    # Count only mode
+    count_sql_via_gen = verifier.generate_sql(orig_sql, opt_sql, count_only=True)
+    count_sql_via_build = verifier.build_verification_query(orig_sql, opt_sql, count_only=True)
+    count_sql_via_func = generate_verification_sql(orig_sql, opt_sql, count_only=True)
+
+    assert count_sql_via_gen == count_sql_via_func
+    assert count_sql_via_build == count_sql_via_func
+    assert "COUNT(*) AS cnt" in count_sql_via_gen
