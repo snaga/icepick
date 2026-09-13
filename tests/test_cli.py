@@ -14,7 +14,6 @@ from icepick import __version__
 from icepick.cli import app
 from icepick.exceptions import AuthenticationError
 from icepick.health import ConnectionHealthReport, ServiceTestResult
-from icepick.verifier.equivalence import EquivalenceVerifier, VerificationResult
 
 runner = CliRunner()
 
@@ -143,32 +142,6 @@ class TestCli:
             assert res_rewrite.exit_code == 2
             assert "Error reading file" in res_rewrite.output
 
-    def test_verify_dry_run(self, tmp_path: Path) -> None:
-        """Test that verify --dry-run prints the bidirectional EXCEPT query and exits 0."""
-        orig_file = tmp_path / "orig.sql"
-        opt_file = tmp_path / "opt.sql"
-        orig_file.write_text("SELECT id FROM users", encoding="utf-8")
-        opt_file.write_text("SELECT id FROM users WHERE 1=1", encoding="utf-8")
-
-        result = runner.invoke(app, ["verify", str(orig_file), str(opt_file), "--dry-run"])
-        assert result.exit_code == 0
-        assert "Generated Verification SQL" in result.output
-        assert "EXCEPT" in result.output
-        assert "orig_not_in_opt" in result.output
-        assert "opt_not_in_orig" in result.output
-
-    def test_verify_read_error(self, tmp_path: Path) -> None:
-        """Test verify error handling when reading SQL files fails."""
-        orig_file = tmp_path / "orig.sql"
-        opt_file = tmp_path / "opt.sql"
-        orig_file.write_text("SELECT 1", encoding="utf-8")
-        opt_file.write_text("SELECT 1", encoding="utf-8")
-
-        with patch.object(Path, "read_text", side_effect=OSError("Permission denied")):
-            result = runner.invoke(app, ["verify", str(orig_file), str(opt_file), "--dry-run"])
-            assert result.exit_code == 2
-            assert "Error reading files" in result.output
-
     def test_check_json_clean_sql_outputs_empty_array(self, tmp_path: Path) -> None:
         """Test that check --json outputs an empty JSON array for clean SQL and exits 0."""
         sql_file = tmp_path / "clean.sql"
@@ -228,19 +201,6 @@ class TestCli:
         assert "postgres" in result.output
         assert "duckdb" in result.output
         assert "bigquery" in result.output
-
-    def test_verify_invalid_dialect_enum_error(self, tmp_path: Path) -> None:
-        """Test that verify with invalid --dialect outputs supported dialect enum choices and exits 1."""
-        sql_file = tmp_path / "clean.sql"
-        sql_file.write_text("SELECT 1", encoding="utf-8")
-
-        result = runner.invoke(
-            app,
-            ["verify", str(sql_file), str(sql_file), "--dialect", "unknown_sql"],
-        )
-        assert result.exit_code == 1
-        assert "error: Invalid dialect 'unknown_sql'" in result.output
-        assert "snowflake" in result.output
 
     def test_check_detects_snow_004_implicit_cross_join(self, tmp_path: Path) -> None:
         """Test that check command detects comma join (SNOW-004)."""
@@ -611,224 +571,6 @@ class TestCli:
         assert "No optimizable issues found" in result.output
         assert sql_file.read_text(encoding="utf-8") == original_sql
 
-    def test_rewrite_cli_verify_loop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test rewrite --verify-loop with self-correction retry leading to verified diff."""
-        sql_file = tmp_path / "correlated.sql"
-        original_sql = (
-            "SELECT c.cust_id FROM customers c "
-            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
-        )
-        sql_file.write_text(original_sql, encoding="utf-8")
-
-        # Set mock Snowflake environment variables
-        monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "test_acct")
-        monkeypatch.setenv("SNOWFLAKE_USER", "test_user")
-        monkeypatch.setenv("SNOWFLAKE_PASSWORD", "test_pass")
-        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_USER", "test_user")
-        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", "test_pass")
-        monkeypatch.setenv("SNOWFLAKE_DATABASE", "test_db")
-        monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "test_wh")
-
-        mock_llm = MagicMock()
-        mock_llm.provider = "gemini"
-        mock_llm.api_key = "mock-api-key"
-        mock_llm._auth_error = None
-        repl1 = sqlglot.parse_one("c.cust_id = 1")
-        repl2 = sqlglot.parse_one("c.cust_id IN (SELECT o.cust_id FROM orders AS o)")
-        mock_llm.rewrite_fragment.side_effect = [repl1, repl2]
-
-        mock_verifier = MagicMock()
-        mock_verifier.verify_with_snowflake.side_effect = [
-            VerificationResult(
-                is_equivalent=False,
-                orig_not_in_opt_count=3,
-                opt_not_in_orig_count=0,
-                verification_sql="EXCEPT 1",
-            ),
-            VerificationResult(
-                is_equivalent=True,
-                orig_not_in_opt_count=0,
-                opt_not_in_orig_count=0,
-                verification_sql="EXCEPT 2",
-            ),
-        ]
-
-        with (
-            patch("icepick.cli.LLMClient", return_value=mock_llm),
-            patch("icepick.cli.EquivalenceVerifier", return_value=mock_verifier),
-        ):
-            result = runner.invoke(app, ["rewrite", str(sql_file), "--verify-loop"])
-            assert result.exit_code == 0
-            assert "c.cust_id IN" in result.output
-            assert mock_llm.rewrite_fragment.call_count == 2
-            assert mock_verifier.verify_with_snowflake.call_count == 2
-            # Read-only verification: file unchanged
-            assert sql_file.read_text(encoding="utf-8") == original_sql
-
-    def test_rewrite_cli_verify_loop_auth_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Test rewrite --verify-loop outputs actionable error and exits 1 when Snowflake credentials missing."""
-        sql_file = tmp_path / "correlated.sql"
-        original_sql = (
-            "SELECT c.cust_id FROM customers c "
-            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
-        )
-        sql_file.write_text(original_sql, encoding="utf-8")
-
-        # Clear snowflake environment variables
-        monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_USER", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_PASSWORD", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_DATABASE", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_WAREHOUSE", raising=False)
-        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
-        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
-
-        mock_llm = MagicMock()
-        mock_llm.provider = "gemini"
-        mock_llm.api_key = "mock-api-key"
-        mock_llm._auth_error = None
-
-        with (
-            patch("icepick.cli.LLMClient", return_value=mock_llm),
-            patch("icepick.cli.resolve_credential_pair", side_effect=Exception("Not found")),
-        ):
-            result = runner.invoke(app, ["rewrite", str(sql_file), "--verify-loop"])
-            assert result.exit_code == 1
-            assert "Authentication Error:" in result.output
-            assert "icepick:snowflake" in result.output
-            assert "cmdkey" in result.output
-            assert "Get-Credential" in result.output
-            assert sql_file.read_text(encoding="utf-8") == original_sql
-
-    def test_rewrite_verify_loop_missing_credentials_displays_wcm_pair_guidance(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Test rewrite --verify-loop displays WCM pair guidance and exits 1 when credentials missing."""
-        sql_file = tmp_path / "correlated.sql"
-        original_sql = (
-            "SELECT c.cust_id FROM customers c "
-            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
-        )
-        sql_file.write_text(original_sql, encoding="utf-8")
-
-        monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_USER", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_PASSWORD", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_DATABASE", raising=False)
-        monkeypatch.delenv("SNOWFLAKE_WAREHOUSE", raising=False)
-        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
-        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
-
-        mock_llm = MagicMock()
-        mock_llm.provider = "gemini"
-        mock_llm.api_key = "mock-api-key"
-        mock_llm._auth_error = None
-
-        with (
-            patch("icepick.cli.LLMClient", return_value=mock_llm),
-            patch("icepick.cli.resolve_credential_pair", side_effect=Exception("Not found")),
-        ):
-            result = runner.invoke(app, ["rewrite", str(sql_file), "--verify-loop"])
-            assert result.exit_code == 1
-            assert "icepick:snowflake" in result.output
-            assert "cmdkey" in result.output
-            assert "Get-Credential" in result.output
-
-    def test_rewrite_cli_verify_loop_exhausted_retries_no_changes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Test rewrite --verify-loop outputs no changes when all verification retries fail."""
-        sql_file = tmp_path / "correlated.sql"
-        original_sql = (
-            "SELECT c.cust_id FROM customers c "
-            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
-        )
-        sql_file.write_text(original_sql, encoding="utf-8")
-
-        monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "test_acct")
-        monkeypatch.setenv("SNOWFLAKE_USER", "test_user")
-        monkeypatch.setenv("SNOWFLAKE_PASSWORD", "test_pass")
-        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_USER", "test_user")
-        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", "test_pass")
-        monkeypatch.setenv("SNOWFLAKE_DATABASE", "test_db")
-        monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "test_wh")
-
-        mock_llm = MagicMock()
-        mock_llm.provider = "gemini"
-        mock_llm.api_key = "mock-api-key"
-        mock_llm._auth_error = None
-        mock_llm.rewrite_fragment.return_value = sqlglot.parse_one("c.cust_id = 99")
-
-        mock_verifier = MagicMock()
-        mock_verifier.verify_with_snowflake.return_value = VerificationResult(
-            is_equivalent=False,
-            orig_not_in_opt_count=10,
-            opt_not_in_orig_count=5,
-            verification_sql="EXCEPT",
-        )
-
-        with (
-            patch("icepick.cli.LLMClient", return_value=mock_llm),
-            patch("icepick.cli.EquivalenceVerifier", return_value=mock_verifier),
-        ):
-            result = runner.invoke(
-                app, ["rewrite", str(sql_file), "--verify-loop", "--max-retries", "2"]
-            )
-            assert result.exit_code == 0
-            assert "No optimizable issues found" in result.output
-            assert sql_file.read_text(encoding="utf-8") == original_sql
-
-    def test_rewrite_cli_verify_loop_json_output(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Test rewrite --verify-loop --json outputs structured JSON with verified rewrite."""
-        sql_file = tmp_path / "correlated.sql"
-        original_sql = (
-            "SELECT c.cust_id FROM customers c "
-            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
-        )
-        sql_file.write_text(original_sql, encoding="utf-8")
-
-        monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "test_acct")
-        monkeypatch.setenv("SNOWFLAKE_USER", "test_user")
-        monkeypatch.setenv("SNOWFLAKE_PASSWORD", "test_pass")
-        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_USER", "test_user")
-        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", "test_pass")
-        monkeypatch.setenv("SNOWFLAKE_DATABASE", "test_db")
-        monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "test_wh")
-
-        mock_llm = MagicMock()
-        mock_llm.provider = "gemini"
-        mock_llm.api_key = "mock-api-key"
-        mock_llm._auth_error = None
-        mock_llm.rewrite_fragment.return_value = sqlglot.parse_one(
-            "c.cust_id IN (SELECT o.cust_id FROM orders AS o)"
-        )
-
-        mock_verifier = MagicMock()
-        mock_verifier.verify_with_snowflake.return_value = VerificationResult(
-            is_equivalent=True,
-            orig_not_in_opt_count=0,
-            opt_not_in_orig_count=0,
-            verification_sql="EXCEPT",
-        )
-
-        with (
-            patch("icepick.cli.LLMClient", return_value=mock_llm),
-            patch("icepick.cli.EquivalenceVerifier", return_value=mock_verifier),
-        ):
-            result = runner.invoke(app, ["rewrite", str(sql_file), "--verify-loop", "--json"])
-            assert result.exit_code == 0
-            data = json.loads(result.output)
-            assert data["file"] == str(sql_file)
-            assert data["has_changes"] is True
-            assert data["issues_count"] == 1
-            assert data["issues"][0]["rule_id"] == "SNOW-002"
-            assert "c.cust_id IN" in data["diff"]
-            assert sql_file.read_text(encoding="utf-8") == original_sql
-
     def test_patch_file_argument(self, tmp_path: Path) -> None:
         """Test applying a patch file directly via argument updates the file."""
         sql_file = tmp_path / "target.sql"
@@ -1046,216 +788,6 @@ class TestCli:
         content = sql_file.read_text(encoding="utf-8")
         assert "SELECT a\n" in content
         assert "ORDER BY a\n" in content
-
-    def test_verify_dry_run_exits_0(self, tmp_path: Path) -> None:
-        """Test that verify --dry-run prints generated SQL and exits 0."""
-        f1 = tmp_path / "orig.sql"
-        f2 = tmp_path / "opt.sql"
-        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
-        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
-
-        result = runner.invoke(app, ["verify", str(f1), str(f2), "--dry-run"])
-        assert result.exit_code == 0
-        assert "Generated Verification SQL" in result.output
-        assert "EXCEPT" in result.output
-
-    def test_verify_success_exits_0(self, tmp_path: Path) -> None:
-        """Test that verify exits 0 when queries are equivalent."""
-        f1 = tmp_path / "orig.sql"
-        f2 = tmp_path / "opt.sql"
-        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
-        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
-
-        mock_result = VerificationResult(
-            is_equivalent=True,
-            orig_not_in_opt_count=0,
-            opt_not_in_orig_count=0,
-            verification_sql="-- verification sql",
-        )
-
-        with patch.object(EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result):
-            result = runner.invoke(app, ["verify", str(f1), str(f2)])
-
-        assert result.exit_code == 0
-        assert "Equivalence Verified!" in result.output
-        assert "0 differences in both directions" in result.output
-
-    def test_verify_difference_exits_1(self, tmp_path: Path) -> None:
-        """Test that verify prints difference table and exits 1 when queries differ."""
-        f1 = tmp_path / "orig.sql"
-        f2 = tmp_path / "opt.sql"
-        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
-        f2.write_text("SELECT 2 AS col;", encoding="utf-8")
-
-        mock_result = VerificationResult(
-            is_equivalent=False,
-            orig_not_in_opt_count=1,
-            opt_not_in_orig_count=2,
-            verification_sql="-- verification sql",
-        )
-
-        with patch.object(EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result):
-            result = runner.invoke(app, ["verify", str(f1), str(f2)])
-
-        assert result.exit_code == 1
-        assert "Equivalence Verification Failed!" in result.output
-        assert "Original not in Optimized" in result.output
-        assert "Optimized not in Original" in result.output
-
-    def test_verify_error_shows_actionable_advice_and_exits_1(self, tmp_path: Path) -> None:
-        """Test that verify shows error and actionable advice when verification errors occur."""
-        f1 = tmp_path / "orig.sql"
-        f2 = tmp_path / "opt.sql"
-        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
-        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
-
-        mock_result = VerificationResult(
-            is_equivalent=False,
-            orig_not_in_opt_count=-1,
-            opt_not_in_orig_count=-1,
-            verification_sql="-- verification sql",
-            error_message="Authentication failed",
-        )
-
-        with patch.object(EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result):
-            result = runner.invoke(app, ["verify", str(f1), str(f2)])
-
-        assert result.exit_code == 1
-        assert "Authentication failed" in (result.output + result.stderr)
-        assert "Actionable Advice:" in (result.output + result.stderr)
-        assert "Verify Snowflake connection settings" in (result.output + result.stderr)
-
-    def test_verify_cli_missing_credentials_displays_wcm_pair_guidance(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Test icepick verify orig.sql opt.sql displays WCM pair guidance and exits 1 when credentials missing."""
-        f1 = tmp_path / "orig.sql"
-        f2 = tmp_path / "opt.sql"
-        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
-        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
-
-        for key in [
-            "SNOWFLAKE_ACCOUNT",
-            "SNOWFLAKE_USER",
-            "SNOWFLAKE_PASSWORD",
-            "SNOWFLAKE_DATABASE",
-            "SNOWFLAKE_WAREHOUSE",
-            "DEBUG_ICEPICK_SNOWFLAKE_USER",
-            "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD",
-        ]:
-            monkeypatch.delenv(key, raising=False)
-
-        with patch(
-            "icepick.verifier.equivalence.resolve_credential_pair",
-            side_effect=Exception("Not found"),
-        ):
-            result = runner.invoke(app, ["verify", str(f1), str(f2)])
-
-        assert result.exit_code == 1
-        output = result.output + (result.stderr or "")
-        assert "icepick:snowflake" in output
-        assert "cmdkey" in output
-        assert "Get-Credential" in output
-
-    def test_verify_cli_missing_credentials_json_output(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Test icepick verify orig.sql opt.sql --json outputs error JSON and exits 1 when credentials missing."""
-        f1 = tmp_path / "orig.sql"
-        f2 = tmp_path / "opt.sql"
-        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
-        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
-
-        for key in [
-            "SNOWFLAKE_ACCOUNT",
-            "SNOWFLAKE_USER",
-            "SNOWFLAKE_PASSWORD",
-            "SNOWFLAKE_DATABASE",
-            "SNOWFLAKE_WAREHOUSE",
-            "DEBUG_ICEPICK_SNOWFLAKE_USER",
-            "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD",
-        ]:
-            monkeypatch.delenv(key, raising=False)
-
-        with patch(
-            "icepick.verifier.equivalence.resolve_credential_pair",
-            side_effect=Exception("Not found"),
-        ):
-            result = runner.invoke(app, ["verify", str(f1), str(f2), "--json"])
-
-        assert result.exit_code == 1
-        data = json.loads(result.output)
-        assert data["original_file"] == str(f1)
-        assert data["optimized_file"] == str(f2)
-        assert data["is_equivalent"] is False
-        assert data["error"] is not None
-        assert "icepick:snowflake" in data["error"]
-        assert "cmdkey" in data["error"]
-        assert "Get-Credential" in data["error"]
-
-
-    def test_verify_json_output(self, tmp_path: Path) -> None:
-        """Test that verify --json outputs structured JSON and respects equivalence exit code."""
-        f1 = tmp_path / "orig.sql"
-        f2 = tmp_path / "opt.sql"
-        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
-        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
-
-        mock_result_ok = VerificationResult(
-            is_equivalent=True,
-            orig_not_in_opt_count=0,
-            opt_not_in_orig_count=0,
-            verification_sql="-- verification sql",
-        )
-
-        with patch.object(
-            EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result_ok
-        ):
-            result_ok = runner.invoke(app, ["verify", str(f1), str(f2), "--json"])
-
-        assert result_ok.exit_code == 0
-        data_ok = json.loads(result_ok.output)
-        assert data_ok["original_file"] == str(f1)
-        assert data_ok["optimized_file"] == str(f2)
-        assert data_ok["is_equivalent"] is True
-        assert data_ok["orig_not_in_opt_count"] == 0
-        assert data_ok["opt_not_in_orig_count"] == 0
-        assert data_ok["error"] is None
-
-        # Also test --json when verification fails
-        mock_result_diff = VerificationResult(
-            is_equivalent=False,
-            orig_not_in_opt_count=5,
-            opt_not_in_orig_count=3,
-            verification_sql="-- verification sql",
-        )
-
-        with patch.object(
-            EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result_diff
-        ):
-            result_diff = runner.invoke(app, ["verify", str(f1), str(f2), "--json"])
-
-        assert result_diff.exit_code == 1
-        data_diff = json.loads(result_diff.output)
-        assert data_diff["is_equivalent"] is False
-        assert data_diff["orig_not_in_opt_count"] == 5
-        assert data_diff["opt_not_in_orig_count"] == 3
-        assert data_diff["error"] is None
-
-    def test_verify_dry_run_json_output(self, tmp_path: Path) -> None:
-        """Test that verify --dry-run --json outputs structured JSON with verification_sql."""
-        f1 = tmp_path / "orig.sql"
-        f2 = tmp_path / "opt.sql"
-        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
-        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
-
-        result = runner.invoke(app, ["verify", str(f1), str(f2), "--dry-run", "--json"])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert data["original_file"] == str(f1)
-        assert data["optimized_file"] == str(f2)
-        assert data["dry_run"] is True
-        assert "EXCEPT" in data["verification_sql"]
 
     def test_rewrite_provider_and_model_options(self, tmp_path: Path) -> None:
         """Test rewrite with --provider and --model options passes them to config and shows feedback banner."""
@@ -1702,4 +1234,100 @@ class TestCli:
         assert "Authentication Error:" in result.output
         assert "Ensure Google Cloud ADC is authenticated" in result.output
         assert "gcp_project" in result.output
+
+
+class TestVerifyCLI:
+    """CLI tests for the refreshed verify command (bidirectional EXCEPT SQL generation)."""
+
+    def test_verify_cli_generates_sql_to_stdout(self, tmp_path: Path) -> None:
+        """Test that icepick verify orig.sql opt.sql outputs EXCEPT query to stdout and exits 0."""
+        orig_file = tmp_path / "orig.sql"
+        opt_file = tmp_path / "opt.sql"
+        orig_file.write_text("SELECT id, name FROM users WHERE id > 10;", encoding="utf-8")
+        opt_file.write_text("SELECT id, name FROM users WHERE id > 10 AND 1=1;", encoding="utf-8")
+
+        result = runner.invoke(app, ["verify", str(orig_file), str(opt_file)])
+        assert result.exit_code == 0
+        assert "WITH orig AS (" in result.output
+        assert "opt AS (" in result.output
+        assert "EXCEPT" in result.output
+        assert "orig_not_in_opt" in result.output
+        assert "opt_not_in_orig" in result.output
+        # Verify pure SQL stdout output (no rich formatting tags)
+        assert "[bold" not in result.output
+
+    def test_verify_cli_output_to_file(self, tmp_path: Path) -> None:
+        """Test that icepick verify -o verify.sql saves the verification SQL to the file and exits 0."""
+        orig_file = tmp_path / "orig.sql"
+        opt_file = tmp_path / "opt.sql"
+        out_file = tmp_path / "verify.sql"
+        orig_file.write_text("SELECT 1 AS x", encoding="utf-8")
+        opt_file.write_text("SELECT 1 AS x", encoding="utf-8")
+
+        result = runner.invoke(
+            app, ["verify", str(orig_file), str(opt_file), "-o", str(out_file)]
+        )
+        assert result.exit_code == 0
+        assert "Verification SQL saved to" in result.output
+        assert out_file.exists()
+        saved_sql = out_file.read_text(encoding="utf-8")
+        assert "WITH orig AS (" in saved_sql
+        assert "EXCEPT" in saved_sql
+
+    def test_verify_cli_count_only_flag(self, tmp_path: Path) -> None:
+        """Test that icepick verify --count-only generates count aggregation query containing COUNT(*) AS cnt."""
+        orig_file = tmp_path / "orig.sql"
+        opt_file = tmp_path / "opt.sql"
+        orig_file.write_text("SELECT id FROM users", encoding="utf-8")
+        opt_file.write_text("SELECT id FROM users", encoding="utf-8")
+
+        result = runner.invoke(app, ["verify", str(orig_file), str(opt_file), "--count-only"])
+        assert result.exit_code == 0
+        assert "COUNT(*) AS cnt" in result.output
+        assert "WITH orig AS (" in result.output
+        assert "EXCEPT" in result.output
+
+    def test_verify_cli_invalid_dialect(self, tmp_path: Path) -> None:
+        """Test that verify with invalid --dialect outputs supported dialect enum choices and exits 1."""
+        orig_file = tmp_path / "orig.sql"
+        opt_file = tmp_path / "opt.sql"
+        orig_file.write_text("SELECT 1", encoding="utf-8")
+        opt_file.write_text("SELECT 1", encoding="utf-8")
+
+        result = runner.invoke(
+            app, ["verify", str(orig_file), str(opt_file), "--dialect", "unknown_sql"]
+        )
+        assert result.exit_code == 1
+        assert "error: Invalid dialect 'unknown_sql'" in result.output
+        assert "snowflake" in result.output
+        assert "postgres" in result.output
+        assert "duckdb" in result.output
+        assert "bigquery" in result.output
+
+    def test_verify_cli_read_error(self, tmp_path: Path) -> None:
+        """Test that verify exits with code 2 when reading files fails."""
+        orig_file = tmp_path / "orig.sql"
+        opt_file = tmp_path / "opt.sql"
+        orig_file.write_text("SELECT 1", encoding="utf-8")
+        opt_file.write_text("SELECT 1", encoding="utf-8")
+
+        with patch.object(Path, "read_text", side_effect=OSError("Read error")):
+            result = runner.invoke(app, ["verify", str(orig_file), str(opt_file)])
+            assert result.exit_code == 2
+            assert "Error reading files" in result.output
+
+    def test_verify_cli_write_error(self, tmp_path: Path) -> None:
+        """Test that verify exits with code 2 when writing output file fails."""
+        orig_file = tmp_path / "orig.sql"
+        opt_file = tmp_path / "opt.sql"
+        out_file = tmp_path / "readonly" / "verify.sql"
+        orig_file.write_text("SELECT 1", encoding="utf-8")
+        opt_file.write_text("SELECT 1", encoding="utf-8")
+
+        with patch.object(Path, "write_text", side_effect=OSError("Permission denied")):
+            result = runner.invoke(
+                app, ["verify", str(orig_file), str(opt_file), "-o", str(out_file)]
+            )
+            assert result.exit_code == 2
+            assert "Error writing output file" in result.output
 

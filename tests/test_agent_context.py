@@ -73,6 +73,8 @@ class TestAgentContextUnit:
         assert "--provider" in rewrite_opts
         assert rewrite_opts["--provider"]["choices"] == ["gemini", "vertex"]
         assert "--model" in rewrite_opts
+        assert "--verify-loop" not in rewrite_opts
+        assert "--max-retries" not in rewrite_opts
 
         # Check 'config' command and subcommands
         config_cmd = commands["config"]
@@ -103,10 +105,16 @@ class TestAgentContextUnit:
 
         # Check options for 'verify'
         verify_opts = commands["verify"]["options"]
-        assert "--dry-run" in verify_opts
-        assert "--timeout" in verify_opts
-        assert "--config" in verify_opts
-        assert "--json" in verify_opts
+        assert "--output" in verify_opts
+        assert verify_opts["--output"]["flag"] == "-o"
+        assert "--count-only" in verify_opts
+        assert verify_opts["--count-only"]["type"] == "bool"
+        assert "--dialect" in verify_opts
+        assert "--dry-run" not in verify_opts
+        assert "--timeout" not in verify_opts
+        assert "--config" not in verify_opts
+        assert "--json" not in verify_opts
+        assert "snow CLI" in commands["verify"]["description"]
 
         # Check --dialect choices
         expected_dialects = ["snowflake", "postgres", "duckdb", "bigquery"]

@@ -225,34 +225,32 @@ class TestAgentReadiness:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Verify that verify without credentials exits 1 with actionable recovery commands in stderr."""
-        orig_file = tmp_path / "original.sql"
-        opt_file = tmp_path / "optimized.sql"
-        orig_file.write_text("SELECT id FROM users", encoding="utf-8")
-        opt_file.write_text("SELECT id FROM users WHERE 1=1", encoding="utf-8")
-
+        """Verify that snowflake connection test without credentials exits 1 with actionable recovery commands."""
         # Ensure no environment variables or WCM credentials exist
         monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
         monkeypatch.delenv("SNOWFLAKE_PASSWORD", raising=False)
+        monkeypatch.delenv("SNOWFLAKE_USER", raising=False)
+        monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
 
         with patch("icepick.security.credentials.read_wcm_credential", return_value=None):
-            result = runner.invoke(app, ["verify", str(orig_file), str(opt_file)])
+            result = runner.invoke(app, ["config", "test", "--snowflake"])
 
         # Must exit with code 1 (Authentication Error)
         assert result.exit_code == 1
 
-        # Actionable instructions must be present in stderr
-        stderr_text = result.stderr
-        assert "[Authentication Error]" in stderr_text
-        assert "snowflake" in stderr_text
+        # Actionable instructions must be present in output
+        combined_text = result.output + (result.stderr or "")
+        assert "[Authentication Error]" in combined_text
+        assert "snowflake" in combined_text
 
         # Verify PowerShell masked credential guidance
-        assert "$cred = Get-Credential" in stderr_text
-        assert "cmdkey /generic:icepick:snowflake" in stderr_text
+        assert "$cred = Get-Credential" in combined_text
+        assert "cmdkey /generic:icepick:snowflake" in combined_text
 
         # Verify debug environment variable fallback guidance
-        assert "$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD=" in stderr_text
-        assert "$env:DEBUG_ICEPICK_SNOWFLAKE_USER=" in stderr_text
+        assert "$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD=" in combined_text
+        assert "$env:DEBUG_ICEPICK_SNOWFLAKE_USER=" in combined_text
 
     def test_readiness_enumerated_error_on_invalid_arguments(self, tmp_path: Path) -> None:
         """Verify that invalid arguments yield exit code 1 and display accepted enum choices in stderr."""
