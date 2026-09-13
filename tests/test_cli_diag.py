@@ -118,9 +118,7 @@ class TestCliDiag:
         assert "MEDIUM" not in severities_high
 
         # With --severity CRITICAL: neither HIGH nor MEDIUM meet CRITICAL, so 0 issues -> exit 0
-        res_crit = runner.invoke(
-            app, ["diag", str(sql_file), "--severity", "CRITICAL", "--json"]
-        )
+        res_crit = runner.invoke(app, ["diag", str(sql_file), "--severity", "CRITICAL", "--json"])
         assert res_crit.exit_code == 0
         data_crit = json.loads(res_crit.output)
         assert data_crit["issues_count"] == 0

@@ -194,8 +194,7 @@ class PrescriptionPlan:
         """
         raw_rx = data.get("prescriptions", [])
         prescriptions = [
-            p if isinstance(p, Prescription) else Prescription.from_dict(p)
-            for p in raw_rx
+            p if isinstance(p, Prescription) else Prescription.from_dict(p) for p in raw_rx
         ]
         return cls(
             schema_version=data.get("schema_version", "1.0"),

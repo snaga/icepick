@@ -40,6 +40,7 @@ class TestAgentContextUnit:
         commands = ctx["commands"]
         expected_commands = {
             "check",
+            "diag",
             "rewrite",
             "patch",
             "verify",
@@ -59,6 +60,20 @@ class TestAgentContextUnit:
         # Check argument for 'check'
         assert "file" in commands["check"]["arguments"]
         assert commands["check"]["arguments"]["file"]["required"] is True
+
+        # Check arguments and options for 'diag'
+        assert "file" in commands["diag"]["arguments"]
+        assert commands["diag"]["arguments"]["file"]["required"] is True
+        diag_opts = commands["diag"]["options"]
+        assert "--format" in diag_opts
+        assert diag_opts["--format"]["flag"] == "-f"
+        assert diag_opts["--format"]["choices"] == ["text", "json"]
+        assert "--json" in diag_opts
+        assert diag_opts["--json"]["type"] == "bool"
+        assert "--severity" in diag_opts
+        assert diag_opts["--severity"]["flag"] == "-s"
+        assert diag_opts["--severity"]["choices"] == ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+        assert "--config" in diag_opts
 
         # Check options for 'rewrite'
         rewrite_opts = commands["rewrite"]["options"]
@@ -119,6 +134,7 @@ class TestAgentContextUnit:
         # Check --dialect choices
         expected_dialects = ["snowflake", "postgres", "duckdb", "bigquery"]
         assert commands["check"]["options"]["--dialect"]["choices"] == expected_dialects
+        assert commands["diag"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["rewrite"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["verify"]["options"]["--dialect"]["choices"] == expected_dialects
 

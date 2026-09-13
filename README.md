@@ -133,7 +133,82 @@ icepick check models/batch_mart.sql
 
 ---
 
-### 2. クエリの最適化（Unified Diff 出力）(`rewrite`)
+### 2. 処方箋駆動の最適化診断 (`diag`)
+Snowflake SQL 内の最適化ボトルネックを検出し、独立した**「処方箋（Prescription）」カード**として構造化して提示します（ADR-0005 処方箋ファーストアーキテクチャ）。
+各処方箋には一意な ID（`RX-001`, `RX-002`...）、対象 CTE、ノード型、元の SQL、推奨 SQL、修正理由（Rationale）、期待される改善効果（Expected Impact）が含まれます。
+
+#### ターミナルで処方箋カードを確認する (Human-Friendly)
+```bash
+icepick diag models/batch_mart.sql
+```
+
+```text
+Prescription Plan: 2 optimization prescriptions found in models/batch_mart.sql
+
+╭─ RX-001 HIGH - Rule: SNOW-001 (Action: REPLACE) ────────────────────────────╮
+│ CTE: filtered_events                                                         │
+│ Node: Anonymous                                                              │
+│ Line: L12                                                                    │
+│ Original SQL: TO_DATE(event_timestamp) = '2026-09-01'                        │
+│ Suggested SQL: event_timestamp >= '2026-09-01' AND event_timestamp < ...     │
+│ Rationale: Column 'event_timestamp' is wrapped in a date/cast function...   │
+│ Expected Impact: Enables partition pruning, significantly reducing bytes...  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ RX-002 MEDIUM - Rule: SNOW-003 (Action: DELETE) ────────────────────────────╮
+│ CTE: sorted_base                                                             │
+│ Node: Order                                                                  │
+│ Line: L25                                                                    │
+│ Original SQL: ORDER BY created_at DESC                                       │
+│ Suggested SQL: (Remove node)                                                 │
+│ Rationale: Redundant ORDER BY in CTE 'sorted_base' without LIMIT/FETCH...   │
+│ Expected Impact: Eliminates sorting overhead and potential spilling...       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+#### 重要度フィルタリング (`--severity` / `-s`)
+指定した深刻度しきい値以上の処方箋のみに絞り込んで診断します。
+```bash
+# HIGH 以上の処方箋（HIGH, CRITICAL）のみを抽出
+icepick diag models/batch_mart.sql --severity HIGH
+```
+
+#### AI エージェント向け構造化 JSON 出力 (`--format json` / `--json`)
+AI コーディングエージェント（Claude Code 等）や自動化パイプライン向けに、`schema_version = "1.0"` に準拠した構造化 JSON を `stdout` に出力します。
+```bash
+icepick diag models/batch_mart.sql --format json
+# または短縮形
+icepick diag models/batch_mart.sql --json
+```
+
+```json
+{
+  "schema_version": "1.0",
+  "file": "models/batch_mart.sql",
+  "issues_count": 2,
+  "prescriptions": [
+    {
+      "id": "RX-001",
+      "rule_id": "SNOW-001",
+      "severity": "HIGH",
+      "target": {
+        "cte": "filtered_events",
+        "node_type": "Anonymous",
+        "line_range": [12, 12]
+      },
+      "action": "REPLACE",
+      "original_sql": "TO_DATE(event_timestamp) = '2026-09-01'",
+      "suggested_sql": "event_timestamp >= '2026-09-01' AND event_timestamp < DATEADD(DAY, 1, '2026-09-01')",
+      "rationale": "Column 'event_timestamp' is wrapped in a date/cast function in WHERE clause, preventing partition pruning and clustering key usage.",
+      "expected_impact": "Enables partition pruning, significantly reducing bytes scanned and warehouse execution time."
+    }
+  ]
+}
+```
+*(※ 問題検出時は終了コード `1`、問題なし時は `0`、構文エラー時は `2` を返します)*
+
+---
+
+### 3. クエリの最適化（Unified Diff 出力）(`rewrite`)
 元ファイルを一切改変せず、AST に基づく最適化の差分（Unified Diff）を標準出力またはファイルに出力します。
 
 #### ターミナルで差分を確認する (Read-Only)
@@ -202,7 +277,7 @@ icepick rewrite models/batch_mart.sql --agentic -p vertex -m gemini-1.5-pro
 
 ---
 
-### 3. パッチの適用 (`patch`)
+### 4. パッチの適用 (`patch`)
 Unified Diff を指定の SQL ファイルに外科手術的に適用します。
 
 #### パッチファイルから適用する
@@ -230,7 +305,7 @@ icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run
 
 ---
 
-### 4. セマンティクス等価性検証 SQL の生成 (`verify`)
+### 5. セマンティクス等価性検証 SQL の生成 (`verify`)
 元クエリと最適化クエリが同一の結果セットを返すことを証明するための双方向 `EXCEPT` 検証クエリを決定論的・数学的に生成します（ADR-0004: クレデンシャル不要・純粋 SQL 生成モデル）。
 
 Icepick 自体は Snowflake への直接接続を行わないため、**データベース認証情報・パスワードは一切不要**です。生成された SQL は、開発者が使い慣れた Snowflake CLI (`snow sql`) や `snowsql` にパイプまたはファイル渡しで安全に実行できます。
@@ -269,7 +344,7 @@ SELECT
 
 ---
 
-### 5. エージェント親和性とフィードバックループ (`Agent-Native DX`)
+### 6. エージェント親和性とフィードバックループ (`Agent-Native DX`)
 
 Icepick は、人間だけでなく AI コーディングエージェント（Claude Code, Cursor, Antigravity 等）が自律的かつ安全に利用できるよう設計されています。
 
@@ -297,6 +372,7 @@ icepick feedback "CTE抽出の順序が直感的でわかりやすい" --categor
 すべての主要コマンドで `--json` をサポート。装飾なしの純粋な JSON が `stdout` に出力され、ログやエラーは `stderr` に分離されます。
 ```bash
 icepick check models/batch_mart.sql --json
+icepick diag models/batch_mart.sql --json
 icepick rewrite models/batch_mart.sql --json
 icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run --json
 ```

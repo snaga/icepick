@@ -325,7 +325,6 @@ def diag(
         readable=True,
     ),
 ) -> None:
-
     """Diagnose Snowflake SQL and generate actionable optimization prescriptions."""
     valid_dialect = _validate_dialect(dialect)
 
@@ -402,9 +401,7 @@ def diag(
     )
 
     for rx in plan.prescriptions:
-        severity_val = (
-            rx.severity.value if isinstance(rx.severity, Severity) else str(rx.severity)
-        )
+        severity_val = rx.severity.value if isinstance(rx.severity, Severity) else str(rx.severity)
         if severity_val in {"CRITICAL", "HIGH"}:
             severity_color = "bold red"
         elif severity_val == "MEDIUM":
@@ -437,12 +434,16 @@ def diag(
         if rx.action.value == "DELETE":
             body_lines.append("[bold]Suggested SQL:[/bold] [dim](Remove node)[/dim]")
         elif rx.suggested_sql:
-            body_lines.append(f"[bold]Suggested SQL:[/bold] [green]{escape(rx.suggested_sql)}[/green]")
+            body_lines.append(
+                f"[bold]Suggested SQL:[/bold] [green]{escape(rx.suggested_sql)}[/green]"
+            )
         else:
             body_lines.append("[bold]Suggested SQL:[/bold] [dim](Manual rewrite recommended)[/dim]")
 
         body_lines.append(f"[bold]Rationale:[/bold] {escape(rx.rationale)}")
-        body_lines.append(f"[bold]Expected Impact:[/bold] [italic]{escape(rx.expected_impact)}[/italic]")
+        body_lines.append(
+            f"[bold]Expected Impact:[/bold] [italic]{escape(rx.expected_impact)}[/italic]"
+        )
 
         content = "\n".join(body_lines)
         console.print(Panel(content, title=panel_title, border_style="cyan"))

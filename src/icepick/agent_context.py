@@ -53,6 +53,50 @@ def get_agent_context() -> dict[str, Any]:
                     },
                 },
             },
+            "diag": {
+                "description": "Diagnose Snowflake SQL and generate actionable optimization prescriptions (Prescription-First).",
+                "arguments": {
+                    "file": {
+                        "type": "Path",
+                        "required": True,
+                        "description": "Path to the Snowflake SQL file to diagnose.",
+                    }
+                },
+                "options": {
+                    "--format": {
+                        "flag": "-f",
+                        "type": "str",
+                        "default": "text",
+                        "choices": ["text", "json"],
+                        "description": "Output format: 'text' (human-readable cards) or 'json' (machine-readable plan).",
+                    },
+                    "--json": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Shorthand for --format json.",
+                    },
+                    "--severity": {
+                        "flag": "-s",
+                        "type": "str",
+                        "default": None,
+                        "choices": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                        "description": "Filter prescriptions by severity threshold.",
+                    },
+                    "--dialect": {
+                        "flag": "-d",
+                        "type": "str",
+                        "default": "snowflake",
+                        "choices": ["snowflake", "postgres", "duckdb", "bigquery"],
+                        "description": "SQL dialect to use for parsing.",
+                    },
+                    "--config": {
+                        "flag": "-c",
+                        "type": "Path",
+                        "default": None,
+                        "description": "Path to configuration file (.json or .toml).",
+                    },
+                },
+            },
             "rewrite": {
                 "description": "Optimize Snowflake SQL queries and output Unified Diff (read-only).",
                 "arguments": {
