@@ -303,6 +303,46 @@ class OptimizationResult:
 - **確認コマンド (`icepick config show`)**:
   - 現在解決されている全設定項目（LLM設定、Snowflake設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。機密項目は `display_value` でマスクされる。
 
+### 3.11 接続診断エンジン (`ConnectionTester` / `icepick config test`)
+- 対応要件: E-10
+- **設計思想**:
+  - 最適化（`rewrite`）や検証（`verify`）を実行する前に、設定が正常かつ通信可能であるかを事前検証し、初期導入時のトラブルシューティングコストを最小化する。
+- **データ構造**:
+  - `ServiceTestResult`:
+    - `service: str`: サービス識別子（`"llm"` または `"snowflake"`）
+    - `success: bool`: 接続・疎通成否
+    - `duration_ms: float`: 往復応答時間（ミリ秒）
+    - `message: str`: 成功サマリーまたはエラーメッセージ
+    - `details: dict[str, Any]`: 接続先メタデータ（プロバイダ/モデル名、Snowflakeバージョン、アクティブウェアハウス等）
+    - `actionable_advice: str | None`: 失敗時の自己修正コマンド・ガイダンス
+  - `ConnectionHealthReport`:
+    - `results: dict[str, ServiceTestResult]`: 各サービスの診断結果
+    - `all_passed: bool`: 実行された全チェックが成功したか否か
+    - `to_dict() -> dict[str, Any]`: 機械可読シリアライズ辞書
+- **IPO 記述**:
+  - **Input**: `Config` インスタンス、テスト対象セレクタ（`all`, `llm`, `snowflake`）、タイムアウト秒数
+  - **Processing**:
+    1. **LLM 接続診断 (`test_llm`)**:
+       - アクティブなプロバイダ（Gemini または Vertex AI）に応じて認証トークン/APIキーを解決。
+       - 最小限の Ping リクエストを送信し、HTTP 200 かつ有効なレスポンスが返るか検証。所要時間を計測。
+       - 認証欠損時や通信エラー時は `actionable_advice`（`gcloud auth application-default login` や `cmdkey /generic:icepick:gemini_api_key ...`）を付与。
+    2. **Snowflake 接続診断 (`test_snowflake`)**:
+       - `snowflake_account`, `snowflake_database`, `snowflake_schema`, `snowflake_warehouse` および WCM ペア `icepick:snowflake` から認証情報を解決。
+       - 不足パラメータがある場合は接続前に即座に FAIL とし、WCM ペア登録コマンドを付与。
+       - `snowflake.connector.connect()` を確立し、`SELECT CURRENT_VERSION(), CURRENT_USER(), CURRENT_WAREHOUSE()` を実行。
+       - 成功時はバージョンや接続先メタデータを記録。失敗時はエラー原因に応じた Actionable Advice を付与。
+  - **Output**:
+    - `ConnectionHealthReport` インスタンス
+    - Rich ターミナル表示（ステータステーブル、応答時間、接続先情報、Actionable Advice）
+    - `--json` 指定時は構造化 JSON 出力
+    - 終了コード（全成功: 0, いずれか失敗: 1）
+- **CLI コマンド体系**:
+  - `icepick config test`: 一括接続診断（LLM + Snowflake）
+  - `icepick config test --llm`: LLM のみ診断
+  - `icepick config test --snowflake`: Snowflake のみ診断
+  - `icepick config test --target [all|llm|snowflake]`: ターゲット名指定（相互互換）
+  - `icepick config test --json`: 構造化 JSON 出力
+
 ## 4. シーケンス図（対話型リファクタリングフロー）
 
 ```mermaid
