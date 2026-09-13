@@ -16,8 +16,10 @@
   - [エージェント準備状況テスト (Agent Readiness Test)](#エージェント準備状況テスト-agent-readiness-test)
   - [ConfigResolver & 実行時コンフィグ・フィードバック (icepick/config.py)](#configresolver--実行時コンフィグフィードバック-icepickconfigpy)
   - [LLM 接続診断エンジン (ConnectionTester / icepick config test)](#llm-接続診断エンジン-connectiontester--icepick-config-test)
+  - [処方箋駆動最適化エンジン (PrescriptionEngine / icepick diag / diff / fix)](#処方箋駆動最適化エンジン-prescriptionengine--icepick-diag--diff--fix)
 - [シーケンス図（対話型リファクタリングフロー）](#シーケンス図対話型リファクタリングフロー)
 - [エラーハンドリング](#エラーハンドリング)
+
 
 ## 機能一覧
 
@@ -54,8 +56,12 @@
 | エージェント親和性・運用 | F-E10 | LLM接続診断 | icepick config testによるLLMバックエンドの疎通・認証検証 | E-10 |
 | プラガブルプロバイダ | F-F1 | プロバイダ分離・設定汎化 | BaseLLMProvider基盤と辞書形式optionsによる拡張基盤 | F-1 |
 | プラガブルプロバイダ | F-F2 | Vertex AI堅牢化・明示案内 | role: "user"準拠、マルチパート集約、--provider案内 | F-2 |
+| 処方箋駆動最適化 | F-G1 | 構造化処方箋診断 | icepick diagによる処方箋ID採番とRichカード/JSON出力 | G-1 |
+| 処方箋駆動最適化 | F-G2 | 処方箋ID選択型差分生成 | icepick diffによる特定処方箋（--rx）に絞り込んだ局所Diff生成 | G-2 |
+| 処方箋駆動最適化 | F-G3 | 処方箋ID選択型ファイル適用 | icepick fixによる特定処方箋（--rx）の元ファイル直接適用 | G-3 |
 
 ## アーキテクチャ
+
 
 本システムは、CLI経由でSnowflake SQLを受け取り、AST解析・診断・局所置換・差分提示・等価性検証のパイプラインを実行する。
 
@@ -133,7 +139,38 @@ class OptimizationResult:
     issues: List[DiagnosticIssue]     # 検出された問題リスト
     unified_diff: str                 # 生成されたUnified Diffテキスト
     is_verified: Optional[bool] = None# 等価性検証の合否
+
+class PrescriptionAction(str, Enum):
+    DELETE = "DELETE"
+    REPLACE = "REPLACE"
+    INSERT = "INSERT"
+
+@dataclass
+class PrescriptionTarget:
+    cte: Optional[str]                # 所属するCTE名（トップレベルクエリはNone）
+    node_type: str                    # ASTノード名（例: "Join", "Where", "Select"）
+    line_range: Optional[tuple[int, int]] = None  # 該当箇所の開始・終了行番号
+
+@dataclass
+class Prescription:
+    id: str                           # 一意な処方箋ID（例: "RX-001"）
+    rule_id: str                      # 検出ルールID（例: "SNOW-001"）
+    severity: Severity                # 重要度
+    target: PrescriptionTarget        # 患部の位置情報
+    action: PrescriptionAction        # 操作種別 (DELETE, REPLACE, INSERT)
+    original_sql: str                 # 置換・削除対象の既存SQL断片
+    suggested_sql: Optional[str]      # 推奨される置換後SQL断片（DELETE時はNone）
+    rationale: str                    # 修正すべき理由・根拠（Why）
+    expected_impact: str              # 期待される改善効果（スキャン量削減等）
+
+@dataclass
+class PrescriptionPlan:
+    schema_version: str               # "1.0"
+    file: str                         # 対象SQLファイルパス
+    issues_count: int                 # 検出件数
+    prescriptions: List[Prescription] # 処方箋リスト
 ```
+
 
 ## 機能詳細
 
@@ -478,7 +515,42 @@ class OptimizationResult:
   - `icepick config test --model gemini-2.5-flash`: モデルを明示指定してテスト
   - `icepick config test --json`: 構造化 JSON 出力
 
+### 4.12 処方箋駆動最適化エンジン (`PrescriptionEngine` / `icepick diag` / `diff` / `fix`)
+- 対応要件: G-1, G-2, G-3
+- **設計思想**:
+  - 長大なSnowflake SQLにおいて、クエリ全体の再生成を避け、意味論的に抽出された改善点と修正指示（処方箋）を独立した単位として扱う。
+  - 診断（`diag`）、差分生成（`diff`）、ファイル適用（`fix`）の3段階パイプラインに責務を分離し、ユーザーやエージェントが任意の処方箋（`--rx`）を選択的に適用できるようにする。
+- **IPO 記述**:
+  1. `PrescriptionEngine.diagnose(sql_text: str, file_path: str = "") -> PrescriptionPlan`:
+     - **Input**: `sql_text: str`, `file_path: str`
+     - **Processing**:
+       1. `sqlglot` を用いて Snowflake AST を構築。
+       2. Linter ルール群（`SNOW-001`〜`SNOW-007`等）を実行し、問題ノード・改善提案を抽出。
+       3. 各検出問題に対して一意な処方箋ID（`RX-001`, `RX-002`...）を採番し、所属CTE、ノード種別、操作種別（DELETE/REPLACE/INSERT）、元のSQL断片、推奨修正SQL断片、Why（理由）、期待効果をカプセル化した `Prescription` リストを構築。
+     - **Output**: `PrescriptionPlan` インスタンス
+  2. `PrescriptionEngine.generate_diff(sql_text: str, plan: PrescriptionPlan, selected_ids: list[str] | None = None) -> str`:
+     - **Input**: `sql_text: str`, `plan: PrescriptionPlan`, `selected_ids: list[str] | None`
+     - **Processing**:
+       1. `selected_ids` が指定されている場合、該当する処方箋IDのみをフィルタ（無効ID指定時は例外送出）。
+       2. 対象処方箋の `original_sql` を元テキストから特定し、`suggested_sql`（または削除）で局所置換（TextSplicer / Splicing）。未変更部分は1文字も触らない。
+       3. 元テキストと置換後テキストから Git 互換 Unified Diff を生成。
+     - **Output**: `str` (Unified Diff)
+  3. `PrescriptionEngine.apply_fixes(sql_text: str, plan: PrescriptionPlan, selected_ids: list[str] | None = None) -> str`:
+     - **Input**: `sql_text: str`, `plan: PrescriptionPlan`, `selected_ids: list[str] | None`
+     - **Processing**:
+       1. 指定された処方箋IDに絞り込み、元テキストに対して局所置換を適用した新しい SQL 文字列を生成。
+     - **Output**: `str` (更新後 SQL 文字列)
+- **CLI コマンド体系**:
+  - `icepick diag <file>`: 処方箋をターミナル上にカード形式で表示。
+  - `icepick diag <file> --format json`: エージェント/外部ツール向け構造化 JSON 出力。
+  - `icepick diff <file>`: 全処方箋を反映した最小 Unified Diff を生成。
+  - `icepick diff <file> --rx RX-001,RX-003`: 指定した処方箋のみを選択して局所 Diff を生成。
+  - `icepick fix <file>`: 全処方箋を元ファイルへインプレース適用。
+  - `icepick fix <file> --rx RX-001`: 指定した処方箋のみを元ファイルへインプレース適用。
+  - `icepick fix <file> --dry-run`: 適用シミュレーションのみ実行（ファイル変更なし）。
+
 ## シーケンス図（対話型リファクタリングフロー）
+
 
 ```mermaid
 sequenceDiagram
@@ -537,7 +609,21 @@ sequenceDiagram
     else 差分あり (cnt > 0)
         Snowflake-->>Agent: 差分行フィードバック (再試行プロンプトへ)
     end
+
+    Note over Dev,CLI: 7. 処方箋駆動パイプライン (diag -> diff -> fix)
+    Dev->>CLI: icepick diag models/batch.sql
+    CLI->>Parser: parse(sql_text)
+    CLI->>Linter: diagnose(AST)
+    CLI->>CLI: 処方箋生成 & ID採番 (RX-001, RX-002...)
+    CLI->>Dev: 処方箋カード表示 (または --format json)
+    Dev->>CLI: icepick diff models/batch.sql --rx RX-001
+    CLI->>CLI: 指定処方箋のみ元テキスト上で局所置換 (Splicing)
+    CLI->>Dev: ピンポイント Unified Diff 表示
+    Dev->>CLI: icepick fix models/batch.sql --rx RX-001
+    CLI->>CLI: 指定処方箋のみ元ファイルへインプレース適用
+    CLI->>Dev: ファイル更新完了
 ```
+
 
 ## 6. エラーハンドリング
 
