@@ -13,6 +13,7 @@ from icepick.security.credentials import (
     decode_credential_blob,
     format_actionable_error,
     format_actionable_pair_error,
+    format_actionable_provider_guidance,
     read_wcm_credential,
     read_wcm_credential_pair,
     resolve_credential,
@@ -330,12 +331,31 @@ class TestActionablePairErrorMessage:
         )
 
 
+class TestActionableProviderGuidance:
+    """Unit tests for format_actionable_provider_guidance."""
+
+    def test_format_actionable_provider_guidance(self) -> None:
+        """Verify format_actionable_provider_guidance contains provider guidance and WCM advice."""
+        msg = format_actionable_provider_guidance("gemini")
+        assert "--provider vertex" in msg
+        assert "ICEPICK_LLM_PROVIDER" in msg
+        assert "cmdkey" in msg
+        assert "icepick:gemini_api_key" in msg
+        assert ".icepick.toml" in msg
+
+        # Non-gemini provider guidance
+        vertex_msg = format_actionable_provider_guidance("vertex")
+        assert "--provider gemini" in vertex_msg
+        assert "ICEPICK_LLM_PROVIDER=gemini" in vertex_msg
+
+
 def test_icepick_credentials_module_reexport() -> None:
-    """Verify that icepick.credentials re-exports all new pair functions."""
+    """Verify that icepick.credentials re-exports all new pair and guidance functions."""
     import icepick.credentials as creds
 
     assert hasattr(creds, "read_wcm_credential_pair")
     assert hasattr(creds, "read_wcm_credential_pair_fn")
     assert hasattr(creds, "resolve_credential_pair")
     assert hasattr(creds, "format_actionable_pair_error")
+    assert hasattr(creds, "format_actionable_provider_guidance")
 

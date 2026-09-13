@@ -10,7 +10,10 @@ import httpx
 
 from icepick.exceptions import AuthenticationError
 from icepick.llm.providers.base import BaseLLMProvider
-from icepick.security.credentials import format_actionable_error, resolve_credential
+from icepick.security.credentials import (
+    format_actionable_provider_guidance,
+    resolve_credential,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +164,7 @@ class GeminiProvider(BaseLLMProvider):
                 "duration_ms": duration_ms,
                 "message": str(exc),
                 "details": {"provider": self.name, "model": self.model},
-                "actionable_advice": format_actionable_error("gemini_api_key"),
+                "actionable_advice": format_actionable_provider_guidance("gemini"),
             }
         except Exception as exc:  # noqa: BLE001
             duration_ms = round((time.perf_counter() - start) * 1000.0, 2)
@@ -173,7 +176,7 @@ class GeminiProvider(BaseLLMProvider):
                 or "api_key" in err_str
                 or "key not valid" in err_str
             ):
-                advice = format_actionable_error("gemini_api_key")
+                advice = format_actionable_provider_guidance("gemini")
             return {
                 "success": False,
                 "duration_ms": duration_ms,

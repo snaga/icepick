@@ -23,6 +23,7 @@ __all__ = [
     "decode_credential_blob",
     "format_actionable_error",
     "format_actionable_pair_error",
+    "format_actionable_provider_guidance",
     "read_wcm_credential",
     "read_wcm_credential_fn",
     "read_wcm_credential_pair",
@@ -299,6 +300,39 @@ def format_actionable_pair_error(
         f"Or set the debug environment variables:\n"
         f'  $env:{env_user}="<your_user>"\n'
         f'  $env:{env_pass}="<your_password>"'
+    )
+
+
+def format_actionable_provider_guidance(current_provider: str = "gemini") -> str:
+    """Generate actionable guidance when LLM provider authentication or configuration fails.
+
+    Specifically advises users and autonomous AI coding agents on how to either
+    supply the missing Gemini API credentials or explicitly switch to alternative
+    providers such as Google Cloud Vertex AI without guessing.
+
+    Args:
+        current_provider: Name of the currently selected provider (default: 'gemini').
+
+    Returns:
+        Actionable instruction string following REQ F-2 and design 3.8 / 3.11.
+    """
+    if current_provider.lower() == "gemini":
+        return (
+            "Gemini API key is not configured.\n"
+            "If you intend to use Google Cloud Vertex AI instead:\n"
+            "  - CLI option:    icepick rewrite query.sql --agentic --provider vertex\n"
+            "  - Environment:   export ICEPICK_LLM_PROVIDER=vertex (or $env:ICEPICK_LLM_PROVIDER=\"vertex\")\n"
+            '  - Config file:   Add \'provider = "vertex"\' under [llm] in .icepick.toml\n'
+            "If you intend to use Gemini API:\n"
+            "  - Windows WCM:   cmdkey /generic:icepick:gemini_api_key /user:gemini /pass:<your_key>\n"
+            '  - Environment:   export GEMINI_API_KEY="<your_key>" (or $env:DEBUG_ICEPICK_GEMINI_API_KEY="<your_key>")'
+        )
+    return (
+        f"LLM provider '{current_provider}' is not configured.\n"
+        "If you intend to use Gemini instead:\n"
+        "  - CLI option:    icepick rewrite query.sql --agentic --provider gemini\n"
+        "  - Environment:   export ICEPICK_LLM_PROVIDER=gemini\n"
+        '  - Config file:   Add \'provider = "gemini"\' under [llm] in .icepick.toml'
     )
 
 

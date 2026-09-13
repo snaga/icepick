@@ -36,6 +36,7 @@ import sqlglot
 from sqlglot import exp
 
 from icepick.config import Config
+from icepick.exceptions import AuthenticationError
 from icepick.llm.providers import create_provider
 from icepick.llm.providers.gemini import GeminiProvider
 from icepick.llm.providers.vertex import VertexAIProvider, _HttpxAuthRequest, _HttpxAuthResponse
@@ -219,6 +220,13 @@ class LLMClient:
         self._location = value
         if isinstance(self._provider, VertexAIProvider):
             self._provider.location = value
+
+    @property
+    def _auth_error(self) -> AuthenticationError | None:
+        """Authentication error encountered during underlying provider initialization, if any."""
+        if isinstance(self._provider, GeminiProvider):
+            return self._provider._auth_error
+        return None
 
     # ── Backward-compatible proxy methods (provider-specific helpers) ─────────
 

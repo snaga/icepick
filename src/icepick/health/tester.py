@@ -22,6 +22,7 @@ from icepick.credentials import (
     AuthenticationError,
     format_actionable_error,
     format_actionable_pair_error,
+    format_actionable_provider_guidance,
     resolve_credential_pair,
 )
 from icepick.llm.client import LLMClient
@@ -193,7 +194,10 @@ class ConnectionTester:
 
         except AuthenticationError as exc:
             duration_ms = round((time.perf_counter() - start) * 1000.0, 2)
-            advice = format_actionable_error("gemini_api_key")
+            if norm_provider in {"gemini", "google"}:
+                advice = format_actionable_provider_guidance("gemini")
+            else:
+                advice = format_actionable_error(f"{norm_provider}_api_key")
             return ServiceTestResult(
                 service="llm",
                 success=False,
@@ -244,7 +248,7 @@ class ConnectionTester:
 
             if status in (401, 403):
                 if norm_provider in {"gemini", "google"}:
-                    advice = format_actionable_error("gemini_api_key")
+                    advice = format_actionable_provider_guidance("gemini")
                 else:
                     advice = (
                         "Please run 'gcloud auth application-default login' to authenticate with "

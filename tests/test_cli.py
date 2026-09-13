@@ -538,10 +538,33 @@ class TestCli:
             assert result.exit_code == 1
             assert "Authentication Error:" in result.output
             assert "Actionable Advice:" in result.output
-            assert (
-                "Set GEMINI_API_KEY environment variable or run 'icepick config' / GCP ADC."
-                in result.output
-            )
+            assert "--provider vertex" in result.output
+            assert "ICEPICK_LLM_PROVIDER" in result.output
+            assert "cmdkey" in result.output
+            # Read-only guarantee
+            assert sql_file.read_text(encoding="utf-8") == original_sql
+
+    def test_rewrite_missing_gemini_key_shows_vertex_guidance(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that rewrite --agentic with missing Gemini API key shows Vertex AI guidance and exits 1."""
+        sql_file = tmp_path / "correlated.sql"
+        original_sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        monkeypatch.delenv("DEBUG_ICEPICK_GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        with patch("icepick.security.credentials.read_wcm_credential_fn", return_value=None):
+            result = runner.invoke(app, ["rewrite", str(sql_file), "--agentic"])
+            assert result.exit_code == 1
+            assert "Authentication Error:" in result.output
+            assert "Actionable Advice:" in result.output
+            assert "--provider vertex" in result.output
+            assert "ICEPICK_LLM_PROVIDER" in result.output
+            assert "cmdkey" in result.output
             # Read-only guarantee
             assert sql_file.read_text(encoding="utf-8") == original_sql
 

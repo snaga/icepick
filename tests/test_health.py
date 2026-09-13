@@ -10,8 +10,8 @@ import pytest
 from icepick.config import Config
 from icepick.credentials import (
     AuthenticationError,
-    format_actionable_error,
     format_actionable_pair_error,
+    format_actionable_provider_guidance,
 )
 from icepick.health.tester import (
     ConnectionHealthReport,
@@ -96,7 +96,28 @@ class TestConnectionTesterLLM:
         assert result.actionable_advice is not None
         assert "cmdkey" in result.actionable_advice
         assert "icepick:gemini_api_key" in result.actionable_advice
-        assert result.actionable_advice == format_actionable_error("gemini_api_key")
+        assert result.actionable_advice == format_actionable_provider_guidance("gemini")
+
+    def test_llm_check_gemini_auth_failure_shows_vertex_guidance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify Gemini auth failure provides actionable guidance with Vertex AI options."""
+        monkeypatch.setattr(
+            "icepick.health.tester.LLMClient",
+            MagicMock(side_effect=AuthenticationError("API key missing", key_name="gemini_api_key")),
+        )
+
+        tester = ConnectionTester()
+        cfg = Config(llm_provider="gemini")
+        result = tester.test_llm(cfg)
+
+        assert result.service == "llm"
+        assert result.success is False
+        assert result.actionable_advice is not None
+        assert "--provider vertex" in result.actionable_advice
+        assert "ICEPICK_LLM_PROVIDER" in result.actionable_advice
+        assert "cmdkey" in result.actionable_advice
+        assert "icepick:gemini_api_key" in result.actionable_advice
 
     def test_llm_check_vertex_adc_failure_actionable_advice(
         self, monkeypatch: pytest.MonkeyPatch

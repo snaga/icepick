@@ -21,7 +21,11 @@ from rich.table import Table
 from icepick import __version__
 from icepick.agent_context import get_agent_context
 from icepick.config import Config, ConfigResolver, RuntimeConfigSummary
-from icepick.credentials import format_actionable_pair_error, resolve_credential_pair
+from icepick.credentials import (
+    format_actionable_pair_error,
+    format_actionable_provider_guidance,
+    resolve_credential_pair,
+)
 from icepick.diff import apply_unified_diff, format_diff, render_diff, split_hunks
 from icepick.exceptions import AuthenticationError, ParseError
 from icepick.feedback import FeedbackRecorder
@@ -433,8 +437,10 @@ def rewrite(
                 i for i in agentic_issues if _get_severity_rank(i.severity) >= target_rank
             ]
         if agentic_issues:
+            provider_name = getattr(cfg, "llm_provider", "gemini")
             try:
                 llm_client = LLMClient(config=cfg)
+                provider_name = getattr(llm_client, "provider", provider_name)
                 if hasattr(llm_client, "_auth_error") and llm_client._auth_error is not None:
                     raise llm_client._auth_error
                 if hasattr(llm_client, "provider"):
@@ -447,9 +453,13 @@ def rewrite(
                             llm_client._get_vertex_token()
             except (AuthenticationError, ValueError) as exc:
                 err_console.print(f"[bold red]Authentication Error:[/bold red] {exc}")
-                err_console.print(
-                    "[yellow]Actionable Advice:[/yellow] Set GEMINI_API_KEY environment variable or run 'icepick config' / GCP ADC."
-                )
+                if provider_name == "gemini" or "gemini" in str(exc).lower():
+                    guidance = format_actionable_provider_guidance("gemini")
+                    err_console.print(f"[yellow]Actionable Advice:[/yellow]\n{guidance}")
+                else:
+                    err_console.print(
+                        "[yellow]Actionable Advice:[/yellow] Set GEMINI_API_KEY environment variable or run 'icepick config' / GCP ADC."
+                    )
                 raise typer.Exit(code=1) from exc
 
             # Resolve and validate Snowflake credentials if verify_loop is requested
