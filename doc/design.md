@@ -38,7 +38,8 @@ flowchart TD
 
     CmdVerify --> Verifier["icepick.verifier.EquivalenceVerifier"]
     TargetFile -.->|Post-apply verification| CmdVerify
-    Verifier --> Snowflake["Snowflake DB (EXCEPT Test)"]
+    Verifier --> VerifySQL["verify.sql / stdout (EXCEPT Query)"]
+    VerifySQL -.->|pipe / execution| SnowCLI["snow CLI / CI Pipeline"]
 ```
 
 ## 2. データモデル / 型定義
@@ -128,9 +129,9 @@ class OptimizationResult:
     3. 各プロバイダがそれぞれの REST API（AI Studio generativelanguage, Vertex AI aiplatform 等）を呼び出してテキストを生成。
     4. LLM レスポンスから SQL コードブロックを抽出。
     5. `sqlglot.parse_one(response_sql, read="snowflake")` で構文検証。構文エラー時は自動リトライまたは安全フォールバック。
-    6. `--verify-loop` 指定時: 生成された置換クエリに対して `EquivalenceVerifier` で Snowflake 双方向 EXCEPT を実行。差分が存在する場合はフィードバックを加えて最大試行回数（`max_retries`）まで自己修復ループを実行。
+    6. ADR-0004 に基づき、Snowflake 直接接続自己修復ループは行わず、構文検証済み置換ノードを安全に返却（等価性検証は生成パッチに対し `icepick verify` を行い、外部エージェントがオーケストレーション）。
   - **Output**:
-    - 最適化された置換 AST ノード（構文検証および等価性検証済み）
+    - 最適化された置換 AST ノード（構文検証済み）
 
 - **プラガブル LLM プロバイダ・アーキテクチャ**:
   外部LLMライブラリ（LangChain等）に依存せず、軽量 `httpx` を基盤とした拡張性の高い疎結合設計を採用。
@@ -240,28 +241,58 @@ class OptimizationResult:
 - **全体再フォーマットフォールバック (`--reformat`)**:
   - インラインサブクエリの CTE 平坦化（`--flatten-subqueries`）など、クエリ全体の構文木組み換えを伴う操作や明示的な再フォーマット指示時は、AST 全体シリアライズによる Diff 生成（`normalize=True`）を許可。
 
-### 3.5 `EquivalenceVerifier` (`icepick/verifier/`)
+### 3.5 `EquivalenceVerifier` / 検証 SQL 生成器 (`icepick/verifier/`)
 - 対応要件: D-1
+- **設計思想 (ADR-0004 準拠)**:
+  - 最適化前後のクエリが等価であるかを判定するための双方向 `EXCEPT` クエリを決定論的に生成する単一責任に特化。
+  - Snowflake への直接接続・実行は行わず、外部の公式ツール（`snow CLI` 等）や社内 CI/CD パイプラインに委ねる。
 - **IPO 記述**:
   - **Input**:
     - `original_sql`: 変更前の SQL クエリ文字列
     - `optimized_sql`: 最適化後の SQL クエリ文字列
     - `dialect`: SQL 方言（デフォルト: `"snowflake"`）
-    - `connection`: Snowflake DB コネクションオブジェクト（`snowflake.connector` 準拠）
+    - `count_only`: 差分件数のみを集計するクエリを生成するか否か（デフォルト: `False`）
   - **Processing**:
-    1. 双方向 `EXCEPT` クエリを自動構築：
-       ```sql
-       WITH orig AS ( <ORIGINAL_SQL> ),
-            opt AS ( <OPTIMIZED_SQL> )
-       SELECT 'orig_not_in_opt' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM orig EXCEPT SELECT * FROM opt)
-       UNION ALL
-       SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM opt EXCEPT SELECT * FROM orig);
-       ```
-    2. Snowflake コネクションを介してクエリを実行し、2 行の結果セット（`orig_not_in_opt` および `opt_not_in_orig` の各カウント）を取得。
-    3. 両方のカウントが `0` の場合のみ `is_equivalent=True` と判定。いずれかが `1` 以上の場合は `is_equivalent=False`。
-    4. 接続エラー・構文エラー発生時は `error_message` を保持して `is_equivalent=False` で復帰。
+    1. 元クエリおよび最適化後クエリを CTE（`orig` および `opt`）としてラッピング。
+    2. 双方向 `EXCEPT` クエリを自動構築：
+       - **通常モード (`count_only=False`)**:
+         ```sql
+         -- Icepick Equivalence Verification Query
+         -- Returns 0 rows if both queries are semantically equivalent.
+         WITH orig AS (
+           <ORIGINAL_SQL>
+         ),
+         opt AS (
+           <OPTIMIZED_SQL>
+         )
+         SELECT 'orig_not_in_opt' AS diff_type, * FROM (
+           SELECT * FROM orig EXCEPT SELECT * FROM opt
+         )
+         UNION ALL
+         SELECT 'opt_not_in_orig' AS diff_type, * FROM (
+           SELECT * FROM opt EXCEPT SELECT * FROM orig
+         );
+         ```
+       - **件数集約モード (`count_only=True`)**:
+         ```sql
+         -- Icepick Equivalence Verification Count Query
+         WITH orig AS (
+           <ORIGINAL_SQL>
+         ),
+         opt AS (
+           <OPTIMIZED_SQL>
+         )
+         SELECT 'orig_not_in_opt' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM orig EXCEPT SELECT * FROM opt)
+         UNION ALL
+         SELECT 'opt_not_in_orig' AS diff_type, COUNT(*) AS cnt FROM (SELECT * FROM opt EXCEPT SELECT * FROM orig);
+         ```
   - **Output**:
-    - `VerificationResult` (`is_equivalent: bool`, `orig_not_in_opt_count: int`, `opt_not_in_orig_count: int`, `verification_sql: str`, `error_message: str | None`)
+    - `verification_sql`: 外部ツール（`snow sql -f -` 等）で即座に実行可能な検証用 SQL 文字列
+  - **CLI コマンド体系**:
+    - `icepick verify orig.sql opt.sql`: 検証 SQL を標準出力（stdout）に出力。
+    - `icepick verify orig.sql opt.sql -o verify.sql`: 検証 SQL をファイルへ出力。
+    - `icepick verify orig.sql opt.sql --count-only`: 件数集約クエリを出力。
+    - パイプ連携例: `icepick verify orig.sql opt.sql | snow sql -f -`
 
 ### 3.6 `FeedbackRecorder` (`icepick/feedback.py` または `cli.py`)
 - 対応要件: E-1
@@ -302,33 +333,16 @@ class OptimizationResult:
 ### 3.8 セキュア認証情報プロバイダ (Secure Credential Management)
 - 対応要件: E-4
 - **厳格な優先順位ピラミッド (The Strict Priority Pyramid)**:
-  1. 一時デバッグ/CI用環境変数（`DEBUG_ICEPICK_` プレフィックス必須。例: `DEBUG_ICEPICK_GEMINI_API_KEY`, `DEBUG_ICEPICK_SNOWFLAKE_USER`, `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD`）
-  2. Windows 資格情報マネージャー（Target: `icepick:gemini_api_key`, `icepick:snowflake`）
-  ※意図しないグローバル環境変数（`GEMINI_API_KEY`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` 等）や設定ファイルへの平文記載は、混入・漏洩・混乱防止のため探索対象から完全に除外する。
-- **Snowflake 認証情報の WCM ペア管理 (`icepick:snowflake`)**:
-  - Win32 API `CredReadW` が返す `_CREDENTIALW` 構造体は、ユーザー名（`UserName`）とパスワード（`CredentialBlob`）の双方を保持できる。
-  - したがって、単一のターゲット `icepick:snowflake` にユーザー名とパスワードをペアで登録・取得する設計とする：
-    - `read_wcm_credential_pair(target: str) -> tuple[str, str] | None`: `(username, password)` を返却。
-    - `resolve_credential_pair(key_name: str = "snowflake", app_prefix: str = "icepick") -> tuple[str, str, str]`: `(username, password, source_description)` を解決。
+  1. 一時デバッグ/CI用環境変数（`DEBUG_ICEPICK_` プレフィックス必須。例: `DEBUG_ICEPICK_GEMINI_API_KEY`）
+  2. Windows 資格情報マネージャー（Target: `icepick:gemini_api_key`）
+  ※意図しないグローバル環境変数（`GEMINI_API_KEY` 等）や設定ファイルへの平文記載は、混入・漏洩・混乱防止のため探索対象から完全に除外する。
+- **WCM 管理の純化 (ADR-0004)**:
+  - ADR-0004 により Snowflake 接続責任を外部公式ツール（`snow CLI` 等）に委ねたため、データベース認証情報の管理は全廃。
+  - Icepick が管理する機密情報は、Google AI Studio の **`icepick:gemini_api_key`** のみとなる。
 - **UTF-16LE / Null Byte トラップ対策**:
-  - Windows `cmdkey` 登録時に混入する UTF-16LE（null バイト `0x00`）を自動検知し、安全にデコードして HTTP リクエストヘッダーや DB 接続文字列の破壊を防ぐ。
+  - Windows `cmdkey` 登録時に混入する UTF-16LE（null バイト `0x00`）を自動検知し、安全にデコードして HTTP リクエストヘッダーの破壊を防ぐ。
 - **Actionable な認証エラーとセキュア登録案内**:
   - 認証情報が取得できない場合、シェル履歴に残さない安全な登録コマンドを含む具体的な自己修正手順を提示して exit code 1 で終了：
-    - **Snowflake 認証未設定時**:
-      ```text
-      [Authentication Error] Snowflake credentials (user and password) are missing or invalid.
-      To fix this, please register your Snowflake credentials in Windows Credential Manager:
-        # Recommended (safe, masked password input without leaving secrets in history):
-        $cred = Get-Credential -Message "Enter Snowflake Credentials"
-        cmdkey /generic:icepick:snowflake /user:$($cred.UserName) /pass:$($cred.GetNetworkCredential().Password)
-
-        # Direct command:
-        cmdkey /generic:icepick:snowflake /user:<snowflake_user> /pass:<snowflake_password>
-
-      Or set the debug environment variables:
-        $env:DEBUG_ICEPICK_SNOWFLAKE_USER="<snowflake_user>"
-        $env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="<snowflake_password>"
-      ```
     - **Gemini API キー未設定時**:
       ```text
       [Authentication Error] Gemini API Key is missing.
@@ -355,66 +369,56 @@ class OptimizationResult:
 - 対応要件: E-9, C-4, E-4
 - **優先順位ピラミッド (Configuration Precedence)**:
   1. **CLI オプション**: `--provider` (`-p`), `--model` (`-m`), `--timeout` (`-t`), `--dialect` (`-d`) 等
-  2. **環境変数**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_DATABASE` 等（※機密項目を除く）
+  2. **環境変数**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` 等（※機密項目を除く）
   3. **設定ファイル**: `--config` 指定ファイル、または暗黙の `.icepick.toml` / `icepick.json`（インフラ構成のみ。認証情報は記載不可・無視）
-  4. **セキュア認証情報**: Windows 資格情報マネージャー（WCM: `icepick:gemini_api_key`, `icepick:snowflake`）
+  4. **セキュア認証情報**: Windows 資格情報マネージャー（WCM: `icepick:gemini_api_key`）
   5. **組み込みデフォルト値**: `llm_provider="gemini"`, `llm_model="gemini-3.8-flash"`, `location="us-central1"` 等
 - **機密項目（`SECRET_KEYS`）の特別解決ルール**:
-  - `SECRET_KEYS = {"gemini_api_key", "snowflake_user", "snowflake_password"}`
-  - 設定ファイルや汎用環境変数（`SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` 等）にはシークレットを配置させず、混在による混乱を防止する。
-  - 機密項目の解決経路は「1. デバッグ環境変数（`DEBUG_ICEPICK_*`）」または「2. WCM（`icepick:snowflake` / `icepick:gemini_api_key`）」のみに限定する。
-  - `snowflake_user` と `snowflake_password` は WCM のターゲット `icepick:snowflake` から一括ペア解決され、ともに `is_secret=True` としてマスク保護される。
+  - `SECRET_KEYS = {"gemini_api_key"}`
+  - 設定ファイルや汎用環境変数（`GEMINI_API_KEY` 等）にはシークレットを配置させず、混在による混乱を防止する。
+  - 機密項目の解決経路は「1. デバッグ環境変数（`DEBUG_ICEPICK_GEMINI_API_KEY`）」または「2. WCM（`icepick:gemini_api_key`）」のみに限定する。
 - **IPO 記述**:
   - **Input**: CLI 引数、明示的/暗黙の設定ファイルパス、環境変数辞書、WCM
   - **Processing**:
     1. 各設定項目について、優先順位に従い上書きマージを実行。
     2. 各項目の値とともに、解決されたソース（`cli_option`, `environment_variable`, `config_file`, `credential_manager`, `default`）を記録した `RuntimeConfigSummary` を構築。
-    3. `--agentic` や `--verify-loop`、`verify` 実行時に、アクティブな設定とソースをターミナルに表示。
+    3. `--agentic` 実行時に、アクティブな設定とソースをターミナルに表示。
     4. `--json` 指定時は出力 JSON のルート要素に `runtime_config` オブジェクトを含めてシリアライズ。
   - **Output**:
     - マージ済み `Config` インスタンス
     - `RuntimeConfigSummary`（キー、値、ソース、マスク済み機密情報）
 - **確認コマンド (`icepick config show`)**:
-  - 現在解決されている全設定項目（LLM設定、Snowflake設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。機密項目は `display_value` でマスクされる。
+  - 現在解決されている全設定項目（LLM設定、Dialect設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。機密項目は `display_value` でマスクされる。
 
-### 3.11 接続診断エンジン (`ConnectionTester` / `icepick config test`)
+### 3.11 LLM 接続診断エンジン (`ConnectionTester` / `icepick config test`)
 - 対応要件: E-10, F-2
 - **設計思想**:
-  - 最適化（`rewrite`）や検証（`verify`）を実行する前に、設定が正常かつ通信可能であるかを事前検証し、初期導入時のトラブルシューティングコストを最小化する。
+  - 最適化（`rewrite`）を実行する前に、LLM バックエンド（Gemini / Vertex AI）の設定が正常かつ通信可能であるかを事前検証し、初期導入時のトラブルシューティングコストを最小化する。
 - **データ構造**:
   - `ServiceTestResult`:
-    - `service: str`: サービス識別子（`"llm"` または `"snowflake"`）
+    - `service: str`: サービス識別子（`"llm"`）
     - `success: bool`: 接続・疎通成否
     - `duration_ms: float`: 往復応答時間（ミリ秒）
     - `message: str`: 成功サマリーまたはエラーメッセージ
-    - `details: dict[str, Any]`: 接続先メタデータ（プロバイダ/モデル名、Snowflakeバージョン、アクティブウェアハウス等）
+    - `details: dict[str, Any]`: 接続先メタデータ（プロバイダ/モデル名、プロジェクト/ロケーション等）
     - `actionable_advice: str | None`: 失敗時の自己修正コマンド・ガイダンス
   - `ConnectionHealthReport`:
-    - `results: dict[str, ServiceTestResult]`: 各サービスの診断結果
+    - `results: dict[str, ServiceTestResult]`: 診断結果
     - `all_passed: bool`: 実行された全チェックが成功したか否か
     - `to_dict() -> dict[str, Any]`: 機械可読シリアライズ辞書
 - **IPO 記述**:
-  - **Input**: `Config` インスタンス、テスト対象セレクタ（`all`, `llm`, `snowflake`）、タイムアウト秒数、プロバイダ上書き（`provider`）、モデル上書き（`model`）
+  - **Input**: `Config` インスタンス、タイムアウト秒数、プロバイダ上書き（`provider`）、モデル上書き（`model`）
   - **Processing**:
-    1. **LLM 接続診断 (`test_llm`)**:
-       - アクティブなプロバイダ（Gemini または Vertex AI、CLI 引数による上書き可）に応じて認証トークン/APIキーを解決。
-       - 最小限の Ping リクエストを送信し、HTTP 200 かつ有効なレスポンスが返るか検証。所要時間を計測。
-       - 認証欠損時や通信エラー時は `actionable_advice`（`gcloud auth application-default login` や `cmdkey /generic:icepick:gemini_api_key ...`、および Vertex AI 指定方法案内）を付与。
-    2. **Snowflake 接続診断 (`test_snowflake`)**:
-       - `snowflake_account`, `snowflake_database`, `snowflake_schema`, `snowflake_warehouse` および WCM ペア `icepick:snowflake` から認証情報を解決。
-       - 不足パラメータがある場合は接続前に即座に FAIL とし、WCM ペア登録コマンドを付与。
-       - `snowflake.connector.connect()` を確立し、`SELECT CURRENT_VERSION(), CURRENT_USER(), CURRENT_WAREHOUSE()` を実行。
-       - 成功時はバージョンや接続先メタデータを記録。失敗時はエラー原因に応じた Actionable Advice を付与。
+    - アクティブなプロバイダ（Gemini または Vertex AI、CLI 引数による上書き可）に応じて認証トークン/APIキーを解決。
+    - プロバイダの `health_check()` または最小限の Ping リクエストを送信し、HTTP 200 かつ有効なレスポンスが返るか検証。所要時間を計測。
+    - 認証欠損時や通信エラー時は `actionable_advice`（`gcloud auth application-default login` や `cmdkey /generic:icepick:gemini_api_key ...`、および Vertex AI 指定方法案内）を付与。
   - **Output**:
     - `ConnectionHealthReport` インスタンス
     - Rich ターミナル表示（ステータステーブル、応答時間、接続先情報、Actionable Advice）
     - `--json` 指定時は構造化 JSON 出力
-    - 終了コード（全成功: 0, いずれか失敗: 1）
+    - 終了コード（成功: 0, 失敗: 1）
 - **CLI コマンド体系**:
-  - `icepick config test`: 一括接続診断（LLM + Snowflake）
-  - `icepick config test --llm`: LLM のみ診断
-  - `icepick config test --snowflake`: Snowflake のみ診断
-  - `icepick config test --target [all|llm|snowflake]`: ターゲット名指定（相互互換）
+  - `icepick config test`: LLM 接続診断を実行
   - `icepick config test --provider vertex`: プロバイダを明示指定してテスト（設定ファイル不要）
   - `icepick config test --model gemini-2.5-flash`: モデルを明示指定してテスト
   - `icepick config test --json`: 構造化 JSON 出力
@@ -425,11 +429,14 @@ class OptimizationResult:
 sequenceDiagram
     autonumber
     actor Dev as 開発者
+    actor Agent as 外部エージェント
     participant CLI as icepick.cli
     participant Parser as SQLParser
     participant Linter as LinterEngine
     participant Patcher as ASTPatcher
+    participant Verifier as EquivalenceVerifier
     participant Diff as DiffFormatter
+    participant Snowflake as Snowflake (snow CLI)
 
     Note over Dev,CLI: 1. 課題の診断 (Read-only)
     Dev->>CLI: icepick check models/batch.sql
@@ -455,32 +462,25 @@ sequenceDiagram
     end
     CLI->>Dev: 対象SQLファイル上書き更新完了
 
-    Note over Dev,CLI: 4. 等価性の検証 (Verifier)
-    Dev->>CLI: icepick verify models/batch_orig.sql models/batch.sql
-    CLI->>Verifier: verify(orig, opt, conn)
-    Verifier->>Snowflake: 双方向 EXCEPT クエリ実行
-    Snowflake-->>Verifier: diff_type, cnt
-    Verifier-->>CLI: VerificationResult
-    CLI->>Dev: 検証結果表示 (差分0件 PASS / 差分検出 FAIL)
+    Note over Dev,CLI: 4. 等価性検証 SQL の生成 (Verification SQL Generator)
+    Dev->>CLI: icepick verify models/batch_orig.sql models/batch.sql (-o verify.sql)
+    CLI->>Verifier: generate_sql(orig, opt)
+    Verifier-->>CLI: 双方向 EXCEPT SQL クエリ文字列
+    CLI->>Dev: 検証 SQL 出力 (stdout / verify.sql)
+    Note over Dev,Snowflake: 5. 外部公式ツールによる実行・判定 (snow CLI / CI)
+    Dev->>Snowflake: snow sql -f verify.sql (またはパイプ連携)
+    Snowflake-->>Dev: 実行結果 (差分行 0 件 = 等価性合格)
 
-    Note over Dev,CLI: 5. Agentic 最適化 & 自己修復ループ (LLM + Verify Loop)
-    Dev->>CLI: icepick rewrite models/batch.sql --agentic --verify-loop
-    loop 自己修復ループ (最大 N 回)
-        CLI->>Slicer: slice_context(AST, issue)
-        Slicer-->>CLI: Context Markdown
-        CLI->>LLM: generate_replacement(Context)
-        LLM-->>CLI: SQL Snippet
-        CLI->>Parser: parse_one(SQL Snippet)
-        Parser-->>CLI: Replacement AST Node
-        CLI->>Verifier: verify(orig, opt, conn)
-        alt 差分なし (EXCEPT cnt == 0)
-            Verifier-->>CLI: Verification PASS
-        else 差分あり (EXCEPT cnt > 0)
-            Verifier-->>CLI: Verification FAIL (差分件数をフィードバック)
-        end
+    Note over Dev,Agent: 6. エージェントによる自律オーケストレーション (外部修復ループ)
+    Agent->>CLI: icepick rewrite models/batch.sql --agentic
+    CLI-->>Agent: 最適化パッチ (Unified Diff)
+    Agent->>CLI: icepick verify models/batch.sql optimized.sql
+    CLI-->>Agent: 双方向 EXCEPT SQL
+    Agent->>Snowflake: snow sql -f - (パイプ実行)
+    alt 差分なし (cnt == 0)
+        Snowflake-->>Agent: 等価性合格 (完了)
+    else 差分あり (cnt > 0)
+        Snowflake-->>Agent: 差分行フィードバック (再試行プロンプトへ)
     end
-    CLI->>Diff: format_diff(orig, opt)
-    Diff-->>CLI: Verified Unified Diff
-    CLI->>Dev: 検証済み Unified Diff 出力
 ```
 
