@@ -114,8 +114,8 @@ class OptimizationResult:
   4. トップレベルの `ast.args["with_"]`（存在しない場合は `ast.set("with_", exp.With(expressions=[...]))`）に追加。
   5. 元のサブクエリノードを `exp.Table(this=cte_alias, alias=original_alias)` で置換。
 
-### 3.3 `ContextSlicer` & `LLMClient` (`icepick/llm/`)
-- 対応要件: B-3, C-1, C-4
+### 3.3 `ContextSlicer`, `LLMClient` & プラガブルプロバイダ基盤 (`icepick/llm/`)
+- 対応要件: B-3, C-1, C-4, F-1
 - **IPO 記述**:
   - **Input**:
     - `target_node`: 置換対象の AST ノード（相関サブクエリ、複雑な結合、共通スキャンノード等）
@@ -124,26 +124,93 @@ class OptimizationResult:
     - `verification_feedback`: （再試行時）前回の EXCEPT 差分結果または構文エラーメッセージ
   - **Processing**:
     1. `ContextSlicer` が対象ノードと直属の親ノード（CTE / 主クエリ）、外部参照テーブル、参照カラム定義を抽出して最小限の Markdown コンテキストを生成。
-    2. `LLMClient` が Gemini (AI Studio) または Vertex AI REST API を呼び出し、プロンプトを送信。
-    3. LLM レスポンスから SQL コードブロックを抽出。
-    4. `sqlglot.parse_one(response_sql, read="snowflake")` で構文検証。構文エラー時は自動リトライまたは安全フォールバック。
-    5. `--verify-loop` 指定時: 生成された置換クエリに対して `EquivalenceVerifier` で Snowflake 双方向 EXCEPT を実行。差分が存在する場合はフィードバックを加えて最大試行回数（`max_retries`）まで自己修復ループを実行。
+    2. `LLMClient` がファサードとして機能し、指定されたプロバイダ（`gemini`, `vertex` 等）のインスタンス（`BaseLLMProvider` 実装）へプロンプト送信を委譲。
+    3. 各プロバイダがそれぞれの REST API（AI Studio generativelanguage, Vertex AI aiplatform 等）を呼び出してテキストを生成。
+    4. LLM レスポンスから SQL コードブロックを抽出。
+    5. `sqlglot.parse_one(response_sql, read="snowflake")` で構文検証。構文エラー時は自動リトライまたは安全フォールバック。
+    6. `--verify-loop` 指定時: 生成された置換クエリに対して `EquivalenceVerifier` で Snowflake 双方向 EXCEPT を実行。差分が存在する場合はフィードバックを加えて最大試行回数（`max_retries`）まで自己修復ループを実行。
   - **Output**:
     - 最適化された置換 AST ノード（構文検証および等価性検証済み）
-- `LLMClient`:
-  - 外部抽象化ライブラリを使わず、`httpx` による軽量REST APIクライアントとして実装。
-  - **Gemini (AI Studio) モード**:
+
+- **プラガブル LLM プロバイダ・アーキテクチャ**:
+  外部LLMライブラリ（LangChain等）に依存せず、軽量 `httpx` を基盤とした拡張性の高い疎結合設計を採用。
+
+  ```mermaid
+  classDiagram
+      class LLMClient {
+          +provider: BaseLLMProvider
+          +model: str
+          +generate_text(prompt: str) str
+          +rewrite_fragment(slice_ctx: SliceContext, dialect: str) Expression
+          +_extract_sql(text: str) str
+      }
+
+      class BaseLLMProvider {
+          <<abstract>>
+          +name: str
+          +model: str
+          +options: dict[str, Any]
+          +timeout: float
+          +generate_text(prompt: str)* str
+          +health_check()* dict[str, Any]
+      }
+
+      class GeminiProvider {
+          +api_key: str | None
+          +generate_text(prompt: str) str
+          +health_check() dict[str, Any]
+      }
+
+      class VertexAIProvider {
+          +project: str | None
+          +location: str
+          +_get_token() str
+          +generate_text(prompt: str) str
+          +health_check() dict[str, Any]
+      }
+
+      class ProviderRegistry {
+          +register(name: str, cls: type)
+          +create(name: str, model: str, options: dict) BaseLLMProvider
+      }
+
+      LLMClient --> BaseLLMProvider : delegates
+      BaseLLMProvider <|-- GeminiProvider : implements
+      BaseLLMProvider <|-- VertexAIProvider : implements
+      ProviderRegistry ..> BaseLLMProvider : instantiates
+  ```
+
+  - **`BaseLLMProvider` (抽象基底クラス `icepick.llm.providers.base`)**:
+    - 責務: 全 LLM プロバイダの共通契約（インターフェース）の定義。
+    - 共通属性: `name: str`, `model: str`, `options: dict[str, Any]`, `timeout: float`, `_http_client: httpx.Client | None`
+    - 必須メソッド:
+      - `generate_text(prompt: str) -> str`: テキスト生成の実行。
+      - `health_check() -> dict[str, Any]`: 疎通・認証の健全性チェック（成否、レイテンシ、メタデータ、Actionable Advice）。
+  - **`GeminiProvider` (`icepick.llm.providers.gemini`)**:
+    - 責務: Google AI Studio Gemini API との通信および API キー認証。
+    - 個別設定 (`options: dict[str, Any]`):
+      - `api_key`: API キー（指定なし時は WCM `icepick:gemini_api_key` または `DEBUG_ICEPICK_GEMINI_API_KEY` から自動解決）。
     - エンドポイント: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
-    - 認証: リクエストヘッダー `x-goog-api-key: {GEMINI_API_KEY}`
-  - **Vertex AI モード**:
+    - 認証: ヘッダー `x-goog-api-key: {api_key}`
+  - **`VertexAIProvider` (`icepick.llm.providers.vertex`)**:
+    - 責務: Google Cloud Vertex AI API との通信および OAuth2 / ADC 認証。
+    - 個別設定 (`options: dict[str, Any]`):
+      - `project`: GCP プロジェクト ID
+      - `location`: リージョン（デフォルト: `"us-central1"`, `"global"` 指定可）
+    - 認証フロー:
+      - 第 1 候補: `google-auth` による ADC トークン取得
+      - 第 2 候補 (フォールバック): `gcloud` CLI（`gcloud auth application-default print-access-token`）による直接トークン取得
+      - 取得したトークンを `Authorization: Bearer {token}` として付与。
     - エンドポイント:
-      - `location == "global"` の場合: `https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google/models/{model}:generateContent`
-      - リージョン指定の場合: `https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
-    - 認証:
-      - 第 1 候補: `google-auth` による ADC (Application Default Credentials) トークン取得
-      - 第 2 候補 (フォールバック): `gcloud.cmd auth application-default print-access-token`（Windows）または `gcloud` のサブプロセス実行により、社内環境のサービスアカウント偽装が設定された gcloud CLI から直接トークンを取得
-      - 取得した OAuth2 Bearer トークンを `Authorization: Bearer {token}` に付与。
-  - レスポンスから Markdown コードブロック（```sql ... ```）を抽出し、`sqlglot.parse_one(llm_sql, read="snowflake")` で即座に構文検証。構文OKなら新しいASTノードを返し、構文エラー時は元のASTノードを維持して安全にフォールバック。
+      - `location == "global"`: `https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google/models/{model}:generateContent`
+      - その他リージョン: `https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
+  - **汎化設定辞書 (`provider_options: dict[str, Any]`)**:
+    - プロバイダ固有の設定（APIキー、GCPプロジェクト、リージョン、将来のパラメータ等）は、すべて `dict[str, Any]` として汎化され、プロバイダファクトリおよび各プロバイダ初期化子に透過的に渡される。
+    - `LLMClient(..., provider_options={"project": "my-p", "location": "asia-northeast1"})` 形式を標準化しつつ、既存のキーワード引数（`api_key`, `project`, `location`）も自動マージして完全な後方互換性を担保。
+  - **プロバイダレジストリ (`ProviderRegistry` / `create_provider`)**:
+    - サポート対象プロバイダ（`gemini`, `vertex`）を登録・解決するファクトリ機構。
+    - 未知のプロバイダが渡された場合は、利用可能なプロバイダ一覧（`gemini`, `vertex`）を提示する Actionable な `ValueError` を送出。
+    - `register_provider(name, cls)` により、将来の新規プロバイダ（OpenAI, Claude, ローカルLLM等）をプラグイン的に追加可能。
 
 ### 3.4 `DiffFormatter` & `TextSplicer` (`icepick/diff/`, `icepick/patcher/`)
 - 対応要件: C-1, C-2, C-3, C-5
