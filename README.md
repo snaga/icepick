@@ -38,9 +38,9 @@ Snowflake 上で稼働する夜間バッチや dbt モデルなどの複雑な S
    * 重厚な外部 SDK（LiteLLM 等）を完全排除し、`httpx` による直接 REST 呼び出しで爆速起動を実現。
    * 患部ノードの周辺文脈のみを最小限スライス（`ContextSlicer`）してプロンプト化し、ハルシネーションを極小化。
    * LLM の返答は必ず `sqlglot.parse_one` で事前検証し、構文不正時は元の AST を一切壊さず安全にフォールバック（Fail-Safe）。
-5. **Git 互換の Unified Diff ＆ 対話型適用 (`git add -p` モデル)**
-   * AST 正規化により、インデント差異による偽陽性（ノイズ差分）を完全に排除した純粋な意味差分を出力。
-   * `--interactive` モードにより、変更箇所（Hunk）ごとに開発者が `[y]/[n]/[q]` で個別承認・適用。
+5. **処方箋ID選択型差分生成 ＆ 書式保持直接適用 (`diff` / `fix`)**
+   * `TextSplicer` によりコメントやインデントなどの元コード書式を 100% 保持したまま最小限の Unified Diff を生成。
+   * 処方箋 ID（`--rx`）による局所狙い撃ち適用や `--dry-run`、非対話環境ガード（`--force`）を完備。
 6. **決定論的等価性自動検証 (Equivalence Verification)**
    * 元クエリと最適化クエリの双方向 `EXCEPT` 差分ゼロ検証クエリを動的生成。セマンティクスが 1 行も変化していないことを数学的・集合論的に証明。
 
@@ -64,23 +64,33 @@ Snowflake 上で稼働する夜間バッチや dbt モデルなどの複雑な S
 
 ```mermaid
 flowchart TD
-    CLI["icepick CLI (Typer / Rich)"] --> Parser["SQLParser (sqlglot)"]
+    subgraph CLI ["icepick.cli (Command Controller)"]
+        CmdDiag["diag"]
+        CmdDiff["diff"]
+        CmdFix["fix"]
+        CmdVerify["verify"]
+    end
+
+    CmdDiag --> Parser["icepick.parser.SQLParser"]
     Parser --> AST["Snowflake Root AST"]
-    AST --> Linter["LinterEngine"]
+    AST --> Linter["icepick.linter.LinterEngine"]
     Linter --> Rules["Rules (SNOW-001 ~ SNOW-007)"]
     Rules --> Issues["List[DiagnosticIssue]"]
-    Issues --> Patcher["ASTPatcher"]
-    Patcher -->|Rule-based| InPlace["In-place Node Replacement"]
-    Patcher -->|Subquery to CTE| CTEExt["SubqueryToCTE (Flattening)"]
-    Patcher -->|LLM-based| Slicer["ContextSlicer"]
-    Slicer --> LLMClient["LLMClient (httpx: Gemini / Vertex)"]
-    LLMClient --> InPlace
-    CTEExt --> InPlace
-    InPlace --> Diff["DiffFormatter (difflib)"]
-    Diff --> Terminal["Rich Color Unified Diff / .patch"]
-    Terminal --> Verifier["EquivalenceVerifier"]
-    Verifier --> SQL["Pure Verification SQL (stdout / -o)"]
-    SQL --> DB["Snowflake CLI / SnowSQL (snow sql -f -)"]
+    Issues --> RxEngine["icepick.prescription.PrescriptionEngine"]
+    RxEngine --> Plan["PrescriptionPlan (RX-001, RX-002...)"]
+
+    CmdDiff --> RxEngine
+    CmdDiff --> Splicer["icepick.patcher.TextSplicer (Source-Preserving)"]
+    Splicer --> Diff["icepick.diff.DiffFormatter"]
+    Diff --> Stdout["stdout / .patch (Clean Minimal Diff)"]
+
+    CmdFix --> Splicer
+    CmdFix --> TargetFile["Target SQL File (In-place Mutation)"]
+
+    CmdVerify --> Verifier["icepick.verifier.EquivalenceVerifier"]
+    TargetFile -.->|Post-fix verification| CmdVerify
+    Verifier --> VerifySQL["verify.sql / stdout (EXCEPT Query)"]
+    VerifySQL -.->|pipe / execution| SnowCLI["snow CLI / CI Pipeline"]
 ```
 
 ---
@@ -109,31 +119,7 @@ uv pip install -e ".[dev]"
 
 ## 💻 使い方 (Usage)
 
-### 1. クエリのアンチパターン診断 (`check`)
-クエリ内のパフォーマンス阻害要因をスキャンし、リッチなカラーテーブルで一覧表示します。
-
-```bash
-icepick check models/batch_mart.sql
-```
-
-```text
-                      Diagnostic Report: batch_mart.sql                      
-+-----------------------------------------------------------------------------+
-| Rule ID  | Rule Name              | Severity | Line | Description           |
-|----------+------------------------+----------+------+-----------------------|
-| SNOW-001 | Non-Sargable Predicate | HIGH     | -    | Column                |
-|          |                        |          |      | 'event_timestamp' is  |
-|          |                        |          |      | wrapped in a          |
-|          |                        |          |      | date/cast function... |
-| SNOW-003 | Redundant Sort in CTE  | MEDIUM   | -    | Redundant ORDER BY    |
-|          |                        |          |      | without LIMIT...      |
-+-----------------------------------------------------------------------------+
-```
-*(※ CI パイプラインでの使用に適しており、問題検出時は終了コード `1`、問題なし時は `0` を返します)*
-
----
-
-### 2. 処方箋駆動の最適化診断 (`diag`)
+### 1. 処方箋駆動の最適化診断 (`diag`)
 Snowflake SQL 内の最適化ボトルネックを検出し、独立した**「処方箋（Prescription）」カード**として構造化して提示します（ADR-0005 処方箋ファーストアーキテクチャ）。
 各処方箋には一意な ID（`RX-001`, `RX-002`...）、対象 CTE、ノード型、元の SQL、推奨 SQL、修正理由（Rationale）、期待される改善効果（Expected Impact）が含まれます。
 
@@ -208,7 +194,7 @@ icepick diag models/batch_mart.sql --json
 
 ---
 
-### 3. 処方箋ID選択型差分生成 (`diff`)
+### 2. 処方箋ID選択型差分生成 (`diff`)
 `diag` で提示された処方箋（Prescription）から必要なものだけを選択（`--rx`）し、元の書式・コメントを完全に維持したまま最小限の Unified Diff を生成します（ADR-0005 処方箋ファーストアーキテクチャ）。
 
 #### 全処方箋を反映した差分をターミナルで確認する
@@ -231,11 +217,11 @@ icepick diff models/batch_mart.sql --rx RX-001,RX-003
 ```bash
 icepick diff models/batch_mart.sql --rx RX-001 -o patches/rx001.patch
 ```
-生成されたパッチは、そのまま `icepick patch` で元ファイルへ安全に適用できます。
+生成されたパッチは、そのまま `git apply` や `icepick fix` で元ファイルへ安全に適用できます。
 
 ---
 
-### 4. 処方箋ID選択型ファイル直接適用 (`fix`)
+### 3. 処方箋ID選択型ファイル直接適用 (`fix`)
 `diag` で提示された処方箋（Prescription）を、**対象の SQL ファイルへ直接インプレース適用**します（要件 G-3, ADR-0005）。
 `TextSplicer` により元のインデント、コメント、改行などの書式を 100% 保持したまま、指定された最適化のみを外科手術的に反映します。
 
@@ -268,104 +254,7 @@ icepick fix models/batch_mart.sql --rx RX-001 --dry-run
 
 ---
 
-### 5. クエリの最適化（Unified Diff 出力）(`rewrite`)
-元ファイルを一切改変せず、AST に基づく最適化の差分（Unified Diff）を標準出力またはファイルに出力します。
-
-#### ターミナルで差分を確認する (Read-Only)
-```bash
-icepick rewrite models/batch_mart.sql
-```
-```diff
---- a/batch_mart.sql
-+++ b/batch_mart.sql
-@@ -16,7 +16,8 @@
-     MAX(event_timestamp) AS last_active
-   FROM raw_events
-   WHERE
--    TO_DATE(event_timestamp) = '2026-09-01'
-+    event_timestamp >= '2026-09-01'
-+    AND event_timestamp < DATEADD(DAY, 1, '2026-09-01')
-   GROUP BY
-     user_id
-```
-
-#### 🛡️ 元ソース書式保持（Source-Preserving Rewrite：デフォルト動作）
-デフォルトでは `TextSplicer` により、**元の生 SQL（4スペース等の独自インデント、小文字キーワード、コメント、改行）を 100% 維持** したまま、患部のみを外科手術的にピンポイント置換し、ノイズ差分（インデント変更やキーワード大文字化による偽陽性）が一切ない最小限の Unified Diff を生成します。
-
-* **パイプライン・パッチ適用保証**:  
-  生成される Diff は元の行コンテキストと完全一致するため、以下のようにパッチを出力して適用する一連の CI/CD やローカルパイプラインにおいて、行不一致エラー（`Hunk rejected`）を起こさずクリーンに適用可能です。
-  ```bash
-  # 1. 最小限の Unified Diff を安全に出力
-  icepick rewrite models/batch_mart.sql -o patches/batch_mart.patch
-
-  # 2. 元ファイルへクリーンに適用（行コンテキスト完全一致）
-  icepick patch models/batch_mart.sql patches/batch_mart.patch
-  ```
-
-#### 全体再フォーマット (`--reformat`)
-チームのコーディング規約や統一フォーマットに合わせて、クエリ全体の AST を再フォーマット（2スペースインデント、大文字キーワード等）したい場合は、`--reformat` フラグを指定します。
-```bash
-icepick rewrite models/batch_mart.sql --reformat
-```
-*(※ `--flatten-subqueries` での CTE 平坦化や `--agentic` による大規模構文変換時も、AST 全体の自動再構築が行われます)*
-
-#### パッチファイルとして保存する (`--output` / `-o`)
-```bash
-icepick rewrite models/batch_mart.sql -o patches/batch_mart.patch
-```
-
-#### インラインサブクエリを CTE に平坦化する (`--flatten-subqueries`)
-```bash
-icepick rewrite models/batch_mart.sql --flatten-subqueries
-```
-
-#### 重要度でフィルタリングする (`--category`)
-```bash
-# HIGH 以上の重要度（CRITICAL, HIGH）のみを適用した Diff を生成
-icepick rewrite models/batch_mart.sql --category HIGH
-```
-
-#### LLM支援による高度なリライト (`--agentic`)
-ルールベースで自動修正できない相関副クエリ（`SNOW-002`）などを、Gemini / Vertex AI による局所スライシングと構文検証を経てリライトします。
-```bash
-# Gemini (デフォルト: gemini-3.8-flash)
-icepick rewrite models/batch_mart.sql --agentic
-
-# Vertex AI プロバイダ & モデル指定
-icepick rewrite models/batch_mart.sql --agentic -p vertex -m gemini-1.5-pro
-```
-
----
-
-### 6. パッチの適用 (`patch`)
-Unified Diff を指定の SQL ファイルに外科手術的に適用します。
-
-#### パッチファイルから適用する
-```bash
-icepick patch models/batch_mart.sql patches/batch_mart.patch
-```
-
-#### 対話形式で変更を 1 つずつ確認・適用する (`--interactive` / `-i`)
-`git add -p` と同様のメンタルモデルで、差分（Hunk）ごとに適用（`[y]/[n]/[q]`）を選択できます。
-```bash
-icepick patch models/batch_mart.sql patches/batch_mart.patch --interactive
-```
-
-#### パイプによるワンライナー即時適用
-`rewrite` の出力をパイプで `patch` に流し込み、`--force` で直接適用できます。
-```bash
-icepick rewrite models/batch_mart.sql | icepick patch models/batch_mart.sql --force
-```
-
-#### 適用シミュレーション (`--dry-run`)
-実ファイルを変更せずに適用結果をシミュレーションします。
-```bash
-icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run
-```
-
----
-
-### 7. セマンティクス等価性検証 SQL の生成 (`verify`)
+### 4. セマンティクス等価性検証 SQL の生成 (`verify`)
 元クエリと最適化クエリが同一の結果セットを返すことを証明するための双方向 `EXCEPT` 検証クエリを決定論的・数学的に生成します（ADR-0004: クレデンシャル不要・純粋 SQL 生成モデル）。
 
 Icepick 自体は Snowflake への直接接続を行わないため、**データベース認証情報・パスワードは一切不要**です。生成された SQL は、開発者が使い慣れた Snowflake CLI (`snow sql`) や `snowsql` にパイプまたはファイル渡しで安全に実行できます。
@@ -404,7 +293,7 @@ SELECT
 
 ---
 
-### 8. エージェント親和性とフィードバックループ (`Agent-Native DX`)
+### 5. エージェント親和性とフィードバックループ (`Agent-Native DX`)
 
 Icepick は、人間だけでなく AI コーディングエージェント（Claude Code, Cursor, Antigravity 等）が自律的かつ安全に利用できるよう設計されています。
 
@@ -425,16 +314,16 @@ icepick feedback "CTE抽出の順序が直感的でわかりやすい" --categor
 ```
 
 #### 破壊的操作の明示的境界 (`--dry-run` & `--force`)
-* `--dry-run`: 実ファイルへの書き込みを安全にスキップし、差分プレビューのみを出力（`fix`, `patch`）。
-* `--force` / `-f`: パイプラインや非対話環境（stdin 非 TTY）でファイル変更コマンド（`fix`, `patch`）を実行する際は、誤爆防止のため `--force` が必須。
+* `--dry-run`: 実ファイルへの書き込みを安全にスキップし、差分プレビューのみを出力（`fix`）。
+* `--force` / `-f`: パイプラインや非対話環境（stdin 非 TTY）でファイル変更コマンド（`fix`）を実行する際は、誤爆防止のため `--force` が必須。
 
 #### 構造化出力 (`--json`)
 すべての主要コマンドで `--json` をサポート。装飾なしの純粋な JSON が `stdout` に出力され、ログやエラーは `stderr` に分離されます。
 ```bash
-icepick check models/batch_mart.sql --json
 icepick diag models/batch_mart.sql --json
-icepick rewrite models/batch_mart.sql --json
-icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run --json
+icepick config show --json
+icepick config test --json
+icepick feedback "CTE抽出の順序が直感的でわかりやすい" --category idea --json
 ```
 
 ---
@@ -541,7 +430,7 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
 どの設定値がどのソースレイヤーによって決定されたかを可視化するため、Icepick は強力な実行時フィードバック機構を備えています。
 
 #### 1. ターミナルでの Rich バナー表示
-`rewrite --agentic` 実行時、適用されている設定とその決定元ソース（CLI / ENV / FILE / KEYRING / DEFAULT）がターミナル上にカラーパネルで表示されます。
+`diff --agentic` 実行時、適用されている設定とその決定元ソース（CLI / ENV / FILE / KEYRING / DEFAULT）がターミナル上にカラーパネルで表示されます。
 
 ```text
 ╭─ Active LLM Configuration ────────────────────────────────╮
@@ -555,7 +444,7 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
 ```
 
 #### 2. 機械可読な `--json` 出力 (`runtime_config`)
-`rewrite --json` 出力には、生成差分データに加えて `runtime_config` オブジェクトが含まれ、解決された値とソースレイヤーがすべて記録されます（API キーなどの機密情報は自動マスキング）。
+`config show --json` 出力などには、解決された値とソースレイヤーがすべて記録されます（API キーなどの機密情報は自動マスキング）。
 
 ```json
 {
@@ -602,7 +491,7 @@ icepick config show --json
 
 ### 🩺 接続事前診断 (Connection Health Check: `icepick config test`)
 
-局所 LLM 最適化（`rewrite --agentic`）を実行する前に、LLM（Gemini / Vertex AI）の設定・認証・ネットワーク疎通が正常かを一発で確認できるヘルスチェックコマンドです。
+局所 LLM 最適化を実行する前に、LLM（Gemini / Vertex AI）の設定・認証・ネットワーク疎通が正常かを一発で確認できるヘルスチェックコマンドです。
 
 ```bash
 # 1. デフォルト設定で LLM 接続診断
@@ -689,7 +578,7 @@ export GCP_PROJECT="my-company-gcp-project"
 export GCP_LOCATION="global"
 
 # CLI で Vertex AI を使ってリライト
-icepick rewrite models/batch.sql --agentic -p vertex -m gemini-1.5-pro
+icepick diff models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 ```
 
 ---
@@ -750,7 +639,7 @@ location = "global"
 | `dialect` | `string` | `"snowflake"` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) |
 | `enabled_rules` | `array[string]` | `[]` | 実行するルールIDのホワイトリスト。空の場合は無効化されていない全ルールを実行。 |
 | `disabled_rules` | `array[string]` | `[]` | スキップするルールIDのブラックリスト（例: `["SNOW-007"]`）。 |
-| `interactive` | `boolean` | `false` | `patch` コマンドで変更箇所（Hunk）ごとに承認プロンプトを出すか。 |
+| `interactive` | `boolean` | `false` | 対話形式で変更確認プロンプトを出すか。 |
 | `show_diff` | `boolean` | `true` | ターミナル上にカラー Unified Diff を出力するか。 |
 | `write_in_place` | `boolean` | `false` | 元の SQL ファイルを直接上書き保存するか。 |
 | `output_patch` | `string \| null` | `null` | 生成された差分を保存する `.patch` ファイルのパス。 |
@@ -772,10 +661,10 @@ Icepick はオープン・クローズドの原則（OCP）に基づき、LLM �
 `--config`（または `-c`）オプションで設定ファイルを指定して実行します。
 ```bash
 # 診断時
-icepick check models/batch_mart.sql --config .icepick.toml
+icepick diag models/batch_mart.sql --config .icepick.toml
 
-# 最適化時
-icepick rewrite models/batch_mart.sql -c .icepick.toml
+# 差分生成時
+icepick diff models/batch_mart.sql -c .icepick.toml
 ```
 
 ---
