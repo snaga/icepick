@@ -153,6 +153,26 @@ icepick rewrite models/batch_mart.sql
      user_id
 ```
 
+#### 🛡️ 元ソース書式保持（Source-Preserving Rewrite：デフォルト動作）
+デフォルトでは `TextSplicer` により、**元の生 SQL（4スペース等の独自インデント、小文字キーワード、コメント、改行）を 100% 維持** したまま、患部のみを外科手術的にピンポイント置換し、ノイズ差分（インデント変更やキーワード大文字化による偽陽性）が一切ない最小限の Unified Diff を生成します。
+
+* **パイプライン・パッチ適用保証**:  
+  生成される Diff は元の行コンテキストと完全一致するため、以下のようにパッチを出力して適用する一連の CI/CD やローカルパイプラインにおいて、行不一致エラー（`Hunk rejected`）を起こさずクリーンに適用可能です。
+  ```bash
+  # 1. 最小限の Unified Diff を安全に出力
+  icepick rewrite models/batch_mart.sql -o patches/batch_mart.patch
+
+  # 2. 元ファイルへクリーンに適用（行コンテキスト完全一致）
+  icepick patch models/batch_mart.sql patches/batch_mart.patch
+  ```
+
+#### 全体再フォーマット (`--reformat`)
+チームのコーディング規約や統一フォーマットに合わせて、クエリ全体の AST を再フォーマット（2スペースインデント、大文字キーワード等）したい場合は、`--reformat` フラグを指定します。
+```bash
+icepick rewrite models/batch_mart.sql --reformat
+```
+*(※ `--flatten-subqueries` での CTE 平坦化や `--agentic` による大規模構文変換時も、AST 全体の自動再構築が行われます)*
+
 #### パッチファイルとして保存する (`--output` / `-o`)
 ```bash
 icepick rewrite models/batch_mart.sql -o patches/batch_mart.patch
