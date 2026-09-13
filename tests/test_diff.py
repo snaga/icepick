@@ -281,3 +281,148 @@ def test_apply_unified_diff_start_idx_prevents_rewind() -> None:
     assert total == 2
     assert applied == 2
     assert patched == "SELECT A\nSELECT 2\nSELECT B\n"
+
+
+def test_apply_unified_diff_indent_re_targeting() -> None:
+    """Test that a 2-space indented unified diff cleanly applies to a 4-space indented file.
+
+    Verifies Indent Re-targeting:
+      - Old lines in the hunk with 2 spaces match the 4-space lines via strip() fallback.
+      - Inserted lines (+ lines) are automatically re-indented to 4 spaces to seamlessly
+        blend into the original file's formatting style.
+    """
+    original = (
+        "SELECT\n"
+        "    id,\n"
+        "    name\n"
+        "FROM\n"
+        "    users\n"
+        "WHERE\n"
+        "    id = 1\n"
+    )
+
+    # Patch created with 2-space indentation
+    diff = (
+        "--- a/query.sql\n"
+        "+++ b/query.sql\n"
+        "@@ -6,2 +6,3 @@\n"
+        " WHERE\n"
+        "-  id = 1\n"
+        "+  id = 2\n"
+        "+  AND active = TRUE\n"
+    )
+
+    patched, applied, total = apply_unified_diff(original, diff)
+    assert total == 1
+    assert applied == 1
+
+    expected = (
+        "SELECT\n"
+        "    id,\n"
+        "    name\n"
+        "FROM\n"
+        "    users\n"
+        "WHERE\n"
+        "    id = 2\n"
+        "    AND active = TRUE\n"
+    )
+    assert patched == expected
+
+
+def test_apply_unified_diff_fuzzy_casing_and_whitespace() -> None:
+    """Test that diff with lowercase keywords and single spaces matches original SQL with uppercase and extra spaces.
+
+    Verifies Fuzzy Token Match:
+      - Whitespace sequences and case differences between hunk old lines and original lines
+        are safely resolved via token normalization.
+      - Correctly retargets indentation to match original line indent level.
+    """
+    original = (
+        "SELECT\n"
+        "    ID,\n"
+        "    NAME\n"
+        "FROM\n"
+        "    USERS\n"
+        "WHERE\n"
+        "    DATE(CREATED_AT)   =   '2023-01-01'\n"
+    )
+
+    # Patch with lowercase SQL and normalized single spaces
+    diff = (
+        "--- a/query.sql\n"
+        "+++ b/query.sql\n"
+        "@@ -6,2 +6,2 @@\n"
+        " where\n"
+        "-    date(created_at) = '2023-01-01'\n"
+        "+    created_at >= '2023-01-01' and created_at < '2023-01-02'\n"
+    )
+
+    patched, applied, total = apply_unified_diff(original, diff)
+    assert total == 1
+    assert applied == 1
+
+    expected = (
+        "SELECT\n"
+        "    ID,\n"
+        "    NAME\n"
+        "FROM\n"
+        "    USERS\n"
+        "WHERE\n"
+        "    created_at >= '2023-01-01' and created_at < '2023-01-02'\n"
+    )
+    assert patched == expected
+
+
+def test_find_matching_position_fallback_tiers() -> None:
+    """Test _find_matching_position multi-tier fallback progression: exact, rstrip, strip, fuzzy."""
+    from icepick.diff.patcher import _find_matching_position
+
+    orig_lines = [
+        "SELECT a,",
+        "    b,",
+        "    c    ",  # has trailing spaces
+        "FROM tbl",
+        "WHERE ID = 100",
+    ]
+
+    # 1. Exact match
+    idx, mode = _find_matching_position(orig_lines, ["SELECT a,", "    b,"], hint_idx=0)
+    assert idx == 0
+    assert mode == "exact"
+
+    # 2. rstrip match (patch line has no trailing spaces, orig has trailing spaces)
+    idx, mode = _find_matching_position(orig_lines, ["    c"], hint_idx=2)
+    assert idx == 2
+    assert mode == "rstrip"
+
+    # 3. strip match (indentation difference: patch has 2 spaces, orig has 4 spaces)
+    idx, mode = _find_matching_position(orig_lines, ["  b,"], hint_idx=1)
+    assert idx == 1
+    assert mode == "strip"
+
+    # 4. Fuzzy match (lowercase and collapsed spaces)
+    idx, mode = _find_matching_position(orig_lines, ["where   id = 100"], hint_idx=4)
+    assert idx == 4
+    assert mode == "fuzzy"
+
+
+def test_apply_unified_diff_tab_indent_re_targeting() -> None:
+    """Test applying a space-indented diff to a tab-indented original file."""
+    original = "SELECT\n\tid,\n\tname\nFROM\n\tusers\nWHERE\n\tid = 1\n"
+    diff = (
+        "--- a/query.sql\n"
+        "+++ b/query.sql\n"
+        "@@ -6,2 +6,3 @@\n"
+        " WHERE\n"
+        "-  id = 1\n"
+        "+  id = 2\n"
+        "+  AND active = TRUE\n"
+    )
+
+    patched, applied, total = apply_unified_diff(original, diff)
+    assert total == 1
+    assert applied == 1
+
+    expected = "SELECT\n\tid,\n\tname\nFROM\n\tusers\nWHERE\n\tid = 2\n\tAND active = TRUE\n"
+    assert patched == expected
+
