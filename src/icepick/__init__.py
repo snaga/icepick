@@ -7,7 +7,15 @@ __version__ = "0.1.0"
 
 from icepick.agent_context import get_agent_context
 from icepick.cli import app
-from icepick.config import Config, OptimizerConfig
+from icepick.config import (
+    Config,
+    ConfigResolver,
+    ConfigSource,
+    OptimizerConfig,
+    RuntimeConfigItem,
+    RuntimeConfigSummary,
+    mask_sensitive,
+)
 from icepick.exceptions import AuthenticationError, IcepickError, ParseError
 from icepick.linter import BaseRule, DiagnosticIssue, LinterEngine, Severity
 from icepick.llm import ContextSlicer, LLMClient, SliceContext
@@ -20,6 +28,8 @@ __all__ = [
     "AuthenticationError",
     "BaseRule",
     "Config",
+    "ConfigResolver",
+    "ConfigSource",
     "ContextSlicer",
     "DiagnosticIssue",
     "EquivalenceVerifier",
@@ -28,6 +38,8 @@ __all__ = [
     "LinterEngine",
     "OptimizerConfig",
     "ParseError",
+    "RuntimeConfigItem",
+    "RuntimeConfigSummary",
     "SQLParser",
     "Severity",
     "SliceContext",
@@ -36,5 +48,6 @@ __all__ = [
     "__version__",
     "app",
     "get_agent_context",
+    "mask_sensitive",
     "parse_snowflake_sql",
 ]

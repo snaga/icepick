@@ -1,8 +1,18 @@
 """Unit tests for icepick configuration management."""
 
+from pathlib import Path
+
 import pytest
 
-from icepick.config import Config, OptimizerConfig
+from icepick.config import (
+    Config,
+    ConfigResolver,
+    ConfigSource,
+    OptimizerConfig,
+    RuntimeConfigItem,
+    RuntimeConfigSummary,
+    mask_sensitive,
+)
 
 
 def test_default_config() -> None:
@@ -135,3 +145,259 @@ def test_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.gemini_api_key is None
     assert cfg.gcp_project is None
     assert cfg.gcp_location is None
+
+
+def test_mask_sensitive() -> None:
+    """Test sensitive string masking with regular, short, empty, and None values."""
+    # Standard secret string
+    assert mask_sensitive("sk-1234567890abcdef") == "sk-...cdef"
+    assert mask_sensitive("supersecretpassword123", prefix_len=4, suffix_len=3) == "supe...123"
+
+    # Short secret strings (len <= prefix_len + suffix_len)
+    assert mask_sensitive("secret") == "***"  # len 6 <= 7
+    assert mask_sensitive("1234567") == "***"  # len 7 <= 7
+    assert mask_sensitive("a") == "***"
+
+    # None and empty strings
+    assert mask_sensitive("") == ""
+    assert mask_sensitive(None) == ""
+
+
+def test_config_resolver_default_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test resolution when no CLI, env, file, or keyring sources are present."""
+    # Clear environment variables
+    for var in [
+        "ICEPICK_DIALECT",
+        "ICEPICK_LLM_PROVIDER",
+        "ICEPICK_LLM_MODEL",
+        "GEMINI_API_KEY",
+        "DEBUG_ICEPICK_GEMINI_API_KEY",
+    ]:
+        monkeypatch.delenv(var, raising=False)
+
+    # Empty env_vars dictionary and temporary empty directory as CWD
+    monkeypatch.chdir(tmp_path)
+    resolver = ConfigResolver(cli_args={}, env_vars={}, use_keyring=False)
+    config, summary = resolver.resolve()
+
+    assert config.dialect == "snowflake"
+    assert config.llm_provider == "gemini"
+    assert config.llm_model == "gemini-3.8-flash"
+    assert config.gemini_api_key is None
+
+    assert summary.get_source("dialect") == ConfigSource.DEFAULT
+    assert summary.get_source("llm_provider") == ConfigSource.DEFAULT
+    assert summary.get_source("llm_model") == ConfigSource.DEFAULT
+    assert summary.get_source("gemini_api_key") == ConfigSource.DEFAULT
+
+
+def test_config_resolver_file_precedence(tmp_path: Path) -> None:
+    """Test configuration file values override defaults with ConfigSource.FILE."""
+    config_file = tmp_path / "icepick.toml"
+    config_file.write_text(
+        """
+        dialect = "snowflake"
+        llm_provider = "vertex"
+        llm_model = "gemini-1.5-pro"
+        gcp_project = "my-gcp-project"
+        gcp_location = "europe-west1"
+        interactive = true
+        enabled_rules = ["SNOW-001", "SNOW-002"]
+        """,
+        encoding="utf-8",
+    )
+
+    resolver = ConfigResolver(
+        cli_args={},
+        env_vars={},
+        config_file=config_file,
+        use_keyring=False,
+    )
+    config, summary = resolver.resolve()
+
+    assert config.llm_provider == "vertex"
+    assert config.llm_model == "gemini-1.5-pro"
+    assert config.gcp_project == "my-gcp-project"
+    assert config.gcp_location == "europe-west1"
+    assert config.interactive is True
+    assert config.enabled_rules == ["SNOW-001", "SNOW-002"]
+
+    assert summary.get_source("llm_provider") == ConfigSource.FILE
+    assert summary.get_source("llm_model") == ConfigSource.FILE
+    assert summary.get_source("gcp_project") == ConfigSource.FILE
+    assert summary.get_source("interactive") == ConfigSource.FILE
+    assert summary.get_source("dialect") == ConfigSource.FILE
+
+
+def test_config_resolver_json_file(tmp_path: Path) -> None:
+    """Test loading configuration from JSON file."""
+    json_file = tmp_path / "icepick.json"
+    json_file.write_text(
+        """{
+            "llm_provider": "vertex",
+            "llm_model": "gemini-1.5-flash",
+            "snowflake_account": "xy12345"
+        }""",
+        encoding="utf-8",
+    )
+
+    resolver = ConfigResolver(config_file=json_file, env_vars={}, use_keyring=False)
+    config, summary = resolver.resolve()
+
+    assert config.llm_provider == "vertex"
+    assert config.llm_model == "gemini-1.5-flash"
+    assert config.snowflake_account == "xy12345"
+    assert summary.get_source("snowflake_account") == ConfigSource.FILE
+
+
+def test_config_resolver_file_not_found(tmp_path: Path) -> None:
+    """Test FileNotFoundError is raised when explicit config file does not exist."""
+    missing = tmp_path / "non_existent.toml"
+    resolver = ConfigResolver(config_file=missing)
+    with pytest.raises(FileNotFoundError, match="Configuration file not found"):
+        resolver.resolve()
+
+
+def test_config_resolver_env_precedence(tmp_path: Path) -> None:
+    """Test environment variables override configuration file and default values."""
+    config_file = tmp_path / "icepick.toml"
+    config_file.write_text(
+        """
+        llm_provider = "vertex"
+        llm_model = "file-model"
+        gcp_project = "file-project"
+        """,
+        encoding="utf-8",
+    )
+
+    env = {
+        "ICEPICK_LLM_MODEL": "env-model",
+        "GCP_PROJECT": "env-project",
+    }
+
+    resolver = ConfigResolver(
+        cli_args={},
+        env_vars=env,
+        config_file=config_file,
+        use_keyring=False,
+    )
+    config, summary = resolver.resolve()
+
+    # Overridden by ENV
+    assert config.llm_model == "env-model"
+    assert summary.get_source("llm_model") == ConfigSource.ENV
+    assert config.gcp_project == "env-project"
+    assert summary.get_source("gcp_project") == ConfigSource.ENV
+
+    # Retained from FILE
+    assert config.llm_provider == "vertex"
+    assert summary.get_source("llm_provider") == ConfigSource.FILE
+
+
+def test_config_resolver_cli_precedence(tmp_path: Path) -> None:
+    """Test CLI arguments override environment variables, file, and defaults."""
+    config_file = tmp_path / "icepick.toml"
+    config_file.write_text(
+        """
+        llm_provider = "vertex"
+        llm_model = "file-model"
+        """,
+        encoding="utf-8",
+    )
+
+    env = {
+        "ICEPICK_LLM_PROVIDER": "vertex",
+        "ICEPICK_LLM_MODEL": "env-model",
+    }
+
+    cli = {
+        "llm_model": "cli-model",
+    }
+
+    resolver = ConfigResolver(
+        cli_args=cli,
+        env_vars=env,
+        config_file=config_file,
+        use_keyring=False,
+    )
+    config, summary = resolver.resolve()
+
+    # Overridden by CLI
+    assert config.llm_model == "cli-model"
+    assert summary.get_source("llm_model") == ConfigSource.CLI
+
+    # From ENV (since CLI did not specify llm_provider)
+    assert config.llm_provider == "vertex"
+    assert summary.get_source("llm_provider") == ConfigSource.ENV
+
+
+def test_config_resolver_keyring_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test secure credentials (WCM / Keyring) are resolved as ConfigSource.KEYRING."""
+    # Ensure env does not have secret
+    env: dict[str, str] = {}
+
+    # Mock read_wcm_credential_fn in credentials
+    import icepick.security.credentials as creds
+
+    def mock_wcm_read(target: str) -> str | None:
+        if target == "icepick:gemini_api_key":
+            return "wcm-super-secret-key-12345"
+        return None
+
+    monkeypatch.setattr(creds, "read_wcm_credential_fn", mock_wcm_read)
+
+    resolver = ConfigResolver(
+        cli_args={},
+        env_vars=env,
+        config_file=None,
+        use_keyring=True,
+    )
+    config, summary = resolver.resolve()
+
+    assert config.gemini_api_key == "wcm-super-secret-key-12345"
+    assert summary.get_source("gemini_api_key") == ConfigSource.KEYRING
+
+    # Non-secret items fall back to default
+    assert summary.get_source("llm_model") == ConfigSource.DEFAULT
+
+
+def test_runtime_config_summary_serialization() -> None:
+    """Test to_dict serialization with masked and unmasked output."""
+    item_secret = RuntimeConfigItem(
+        key="gemini_api_key",
+        value="sk-1234567890abcdef",
+        source=ConfigSource.KEYRING,
+        is_secret=True,
+    )
+    item_plain = RuntimeConfigItem(
+        key="llm_provider",
+        value="gemini",
+        source=ConfigSource.CLI,
+        is_secret=False,
+    )
+
+    summary = RuntimeConfigSummary(
+        items={
+            "gemini_api_key": item_secret,
+            "llm_provider": item_plain,
+        }
+    )
+
+    # Masked serialization (default)
+    masked = summary.to_dict(mask=True)
+    assert masked["gemini_api_key"]["value"] == "sk-...cdef"
+    assert masked["gemini_api_key"]["source"] == "keyring"
+    assert masked["llm_provider"]["value"] == "gemini"
+    assert masked["llm_provider"]["source"] == "cli"
+
+    # Unmasked serialization
+    unmasked = summary.to_dict(mask=False)
+    assert unmasked["gemini_api_key"]["value"] == "sk-1234567890abcdef"
+    assert unmasked["gemini_api_key"]["source"] == "keyring"
+    assert unmasked["llm_provider"]["value"] == "gemini"
+    assert unmasked["llm_provider"]["source"] == "cli"
+
+    # Item accessor
+    assert summary.get_item("gemini_api_key") is item_secret
+    assert summary.get_item("non_existent") is None
+
