@@ -476,12 +476,22 @@ icepick config test
 # 2. LLM のみ診断
 icepick config test --llm
 
-# 3. Snowflake のみ診断
+# 3. Vertex AI の接続診断（設定ファイル未作成でも即時確認可能）
+icepick config test --provider vertex
+
+# 4. モデルを指定して診断
+icepick config test --provider vertex --model gemini-2.5-flash
+
+# 5. Snowflake のみ診断
 icepick config test --snowflake
 
-# 4. 機械可読な JSON 出力（CI / エージェント連携）
+# 6. 機械可読な JSON 出力（CI / エージェント連携）
 icepick config test --json
 ```
+
+> [!TIP]
+> **Vertex AI 環境でのベストプラクティス**:  
+> デフォルトでは `gemini` プロバイダが選択されるため、Google Cloud Vertex AI（ADC認証 / サービスアカウント偽装）を利用する環境では、CLI オプション `--provider vertex`（または環境変数 `ICEPICK_LLM_PROVIDER=vertex`、設定ファイルの `llm_provider = "vertex"`）を明示的に指定して診断を実行してください。設定ファイルが未作成の状態でも即座に Vertex AI 疎通・認証の健全性を確認できます。
 
 #### 診断結果の Rich Table 表示
 各サービスの接続成否、RTT（レイテンシ）、および接続先詳細が美しい表形式で可視化されます。

@@ -453,13 +453,13 @@ def rewrite(
                             llm_client._get_vertex_token()
             except (AuthenticationError, ValueError) as exc:
                 err_console.print(f"[bold red]Authentication Error:[/bold red] {exc}")
-                if provider_name == "gemini" or "gemini" in str(exc).lower():
+                if provider_name == "vertex":
+                    err_console.print(
+                        "[yellow]Actionable Advice:[/yellow] Ensure Google Cloud ADC is authenticated ('gcloud auth application-default login') and 'gcp_project' is set via CLI / config / env."
+                    )
+                else:
                     guidance = format_actionable_provider_guidance("gemini")
                     err_console.print(f"[yellow]Actionable Advice:[/yellow]\n{guidance}")
-                else:
-                    err_console.print(
-                        "[yellow]Actionable Advice:[/yellow] Set GEMINI_API_KEY environment variable or run 'icepick config' / GCP ADC."
-                    )
                 raise typer.Exit(code=1) from exc
 
             # Resolve and validate Snowflake credentials if verify_loop is requested
@@ -1028,6 +1028,18 @@ def test_config(
         "--snowflake",
         help="Test Snowflake connection only.",
     ),
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        "-p",
+        help="LLM provider ('gemini' or 'vertex').",
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="LLM model identifier.",
+    ),
     timeout: float = typer.Option(
         10.0,
         "--timeout",
@@ -1072,9 +1084,14 @@ def test_config(
             )
             raise typer.Exit(code=1)
 
+    cli_args: dict[str, Any] = {}
+    if provider is not None:
+        cli_args["llm_provider"] = provider
+    if model is not None:
+        cli_args["llm_model"] = model
+
     try:
-        resolver = ConfigResolver(config_file=config)
-        cfg, _ = resolver.resolve()
+        cfg, _ = _load_config(config, cli_args=cli_args)
     except (ValueError, FileNotFoundError) as exc:
         err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc

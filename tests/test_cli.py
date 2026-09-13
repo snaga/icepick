@@ -1636,3 +1636,70 @@ class TestCli:
         combined = result.output + (result.stderr or "")
         assert "Configuration Error:" in combined
 
+    def test_config_test_with_explicit_provider(self) -> None:
+        """Test icepick config test --provider vertex overrides provider in config."""
+        mock_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=True,
+                    duration_ms=100.0,
+                    message="Connected.",
+                    details={"provider": "vertex", "model": "gemini-1.5-pro"},
+                )
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            result = runner.invoke(app, ["config", "test", "--provider", "vertex"])
+            assert result.exit_code == 0
+            call_kwargs = mock_tester.test_all.call_args.kwargs
+            cfg_arg = call_kwargs["cfg"]
+            assert cfg_arg.llm_provider == "vertex"
+
+    def test_config_test_with_explicit_model(self) -> None:
+        """Test icepick config test --model overrides model in config."""
+        mock_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=True,
+                    duration_ms=100.0,
+                    message="Connected.",
+                    details={"provider": "gemini", "model": "custom-model"},
+                )
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            result = runner.invoke(app, ["config", "test", "--model", "custom-model"])
+            assert result.exit_code == 0
+            call_kwargs = mock_tester.test_all.call_args.kwargs
+            cfg_arg = call_kwargs["cfg"]
+            assert cfg_arg.llm_model == "custom-model"
+
+    def test_rewrite_vertex_auth_error_shows_adc_guidance(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that rewrite --agentic -p vertex shows ADC guidance on project/auth failure."""
+        sql_file = tmp_path / "correlated.sql"
+        original_sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        monkeypatch.delenv("GCP_PROJECT", raising=False)
+        monkeypatch.delenv("CLOUDSDK_CORE_PROJECT", raising=False)
+        result = runner.invoke(app, ["rewrite", str(sql_file), "--agentic", "--provider", "vertex"])
+        assert result.exit_code == 1
+        assert "Authentication Error:" in result.output
+        assert "Ensure Google Cloud ADC is authenticated" in result.output
+        assert "gcp_project" in result.output
+

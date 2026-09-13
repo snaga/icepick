@@ -301,6 +301,19 @@ def get_agent_context() -> dict[str, Any]:
                                 "default": False,
                                 "description": "Test Snowflake connection only.",
                             },
+                            "--provider": {
+                                "flag": "-p",
+                                "type": "str",
+                                "default": None,
+                                "choices": ["gemini", "vertex"],
+                                "description": "LLM provider ('gemini' or 'vertex').",
+                            },
+                            "--model": {
+                                "flag": "-m",
+                                "type": "str",
+                                "default": None,
+                                "description": "LLM model identifier.",
+                            },
                             "--timeout": {
                                 "type": "float",
                                 "default": 10.0,
