@@ -400,4 +400,3 @@ def test_runtime_config_summary_serialization() -> None:
     # Item accessor
     assert summary.get_item("gemini_api_key") is item_secret
     assert summary.get_item("non_existent") is None
-

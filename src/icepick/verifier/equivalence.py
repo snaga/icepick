@@ -194,7 +194,9 @@ class EquivalenceVerifier:
         user = getattr(cfg, "snowflake_user", None) or os.environ.get("SNOWFLAKE_USER")
         database = getattr(cfg, "snowflake_database", None) or os.environ.get("SNOWFLAKE_DATABASE")
         schema = getattr(cfg, "snowflake_schema", None) or os.environ.get("SNOWFLAKE_SCHEMA")
-        warehouse = getattr(cfg, "snowflake_warehouse", None) or os.environ.get("SNOWFLAKE_WAREHOUSE")
+        warehouse = getattr(cfg, "snowflake_warehouse", None) or os.environ.get(
+            "SNOWFLAKE_WAREHOUSE"
+        )
         role = getattr(cfg, "snowflake_role", None) or os.environ.get("SNOWFLAKE_ROLE")
 
         password = getattr(cfg, "snowflake_password", None)

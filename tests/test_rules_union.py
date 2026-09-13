@@ -174,4 +174,3 @@ class TestUnionToUnionAllPatcherIntegration:
         # Ensure no bare 'UNION' remains that is not 'UNION ALL'
         assert patched_sql.count("UNION ALL") == 2
         assert patched_sql.count("UNION") == 2
-

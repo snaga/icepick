@@ -170,7 +170,9 @@ class TestEquivalenceVerifier:
 
         monkeypatch.setattr(
             "importlib.import_module",
-            lambda name: mock_connector if name == "snowflake.connector" else importlib.__import__(name),
+            lambda name: (
+                mock_connector if name == "snowflake.connector" else importlib.__import__(name)
+            ),
         )
 
         verifier = EquivalenceVerifier()
@@ -206,7 +208,9 @@ class TestEquivalenceVerifier:
         mock_cursor.execute.assert_called_once()
         mock_conn.close.assert_called_once()
 
-    def test_verify_with_snowflake_missing_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_verify_with_snowflake_missing_credentials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Test that missing required connection credentials returns a failed result with error message."""
         for key in [
             "SNOWFLAKE_ACCOUNT",
@@ -296,7 +300,9 @@ class TestEquivalenceVerifier:
 
         monkeypatch.setattr(
             "importlib.import_module",
-            lambda name: mock_connector if name == "snowflake.connector" else importlib.__import__(name),
+            lambda name: (
+                mock_connector if name == "snowflake.connector" else importlib.__import__(name)
+            ),
         )
 
         verifier = EquivalenceVerifier()
@@ -319,9 +325,7 @@ class TestEquivalenceVerifier:
         assert result.opt_not_in_orig_count == -1
         assert "SQL compilation error" in (result.error_message or "")
 
-    def test_verify_with_snowflake_timeout_parameter(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_with_snowflake_timeout_parameter(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that timeout parameter is correctly propagated to session_parameters."""
         mock_connector = MagicMock()
         mock_conn = MagicMock()
@@ -332,7 +336,9 @@ class TestEquivalenceVerifier:
 
         monkeypatch.setattr(
             "importlib.import_module",
-            lambda name: mock_connector if name == "snowflake.connector" else importlib.__import__(name),
+            lambda name: (
+                mock_connector if name == "snowflake.connector" else importlib.__import__(name)
+            ),
         )
 
         verifier = EquivalenceVerifier()
@@ -356,9 +362,7 @@ class TestEquivalenceVerifier:
         assert kwargs.get("session_parameters") == {"STATEMENT_TIMEOUT_IN_SECONDS": 60}
         mock_conn.close.assert_called_once()
 
-    def test_verify_with_snowflake_with_differences(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_with_snowflake_with_differences(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test verification when Snowflake returns differences between queries."""
         mock_connector = MagicMock()
         mock_conn = MagicMock()
@@ -372,7 +376,9 @@ class TestEquivalenceVerifier:
 
         monkeypatch.setattr(
             "importlib.import_module",
-            lambda name: mock_connector if name == "snowflake.connector" else importlib.__import__(name),
+            lambda name: (
+                mock_connector if name == "snowflake.connector" else importlib.__import__(name)
+            ),
         )
 
         verifier = EquivalenceVerifier()

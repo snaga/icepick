@@ -182,4 +182,3 @@ class TestImplicitCrossJoinRuleDetection:
             ast = _parse(sql)
             issues = RULE.check(ast)
             assert issues == [], f"Expected no issues for {sql!r} but got: {issues}"
-

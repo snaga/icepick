@@ -263,4 +263,3 @@ def test_apply_issue_raises_no_actionable_fix() -> None:
     patcher = ASTPatcher()
     with pytest.raises(ValueError, match="has no actionable fix"):
         patcher.apply_issue(node, issue)
-

@@ -15,9 +15,7 @@ from sqlglot import exp
 
 from icepick.linter.base import BaseRule, DiagnosticIssue, Severity
 
-DATE_LITERAL_REGEX = re.compile(
-    r"^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?$"
-)
+DATE_LITERAL_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?$")
 
 
 def _is_date_literal(node: exp.Expr | None) -> bool:

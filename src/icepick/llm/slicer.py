@@ -97,9 +97,7 @@ class ContextSlicer:
             prompt=prompt,
         )
 
-    def _extract_parent_info(
-        self, root_ast: exp.Expression, target_node: exp.Expression
-    ) -> str:
+    def _extract_parent_info(self, root_ast: exp.Expression, target_node: exp.Expression) -> str:
         """Identify the enclosing scope or CTE name of the target node."""
         if target_node is root_ast or target_node.parent is None:
             return "Root query"
@@ -148,9 +146,7 @@ class ContextSlicer:
 
         if issue is not None:
             severity_val = (
-                issue.severity.value
-                if isinstance(issue.severity, Enum)
-                else str(issue.severity)
+                issue.severity.value if isinstance(issue.severity, Enum) else str(issue.severity)
             )
             issue_section = (
                 f"- **Rule ID**: {issue.rule_id} ({issue.rule_name})\n"

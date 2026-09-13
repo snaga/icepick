@@ -13,6 +13,7 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -132,29 +133,33 @@ def _render_active_config_banner(summary: RuntimeConfigSummary, cfg: Config) -> 
     location_item = summary.get_item("gcp_location")
     gemini_key_item = summary.get_item("gemini_api_key")
 
-    provider_src = provider_item.source.value if provider_item else "default"
-    model_src = model_item.source.value if model_item else "default"
+    provider_src = escape(provider_item.source.value if provider_item else "default")
+    model_src = escape(model_item.source.value if model_item else "default")
+    provider_val = escape(str(cfg.llm_provider))
+    model_val = escape(str(cfg.llm_model))
 
     lines = [
         "[bold cyan]Active LLM Configuration:[/bold cyan]",
-        f"  Provider: {cfg.llm_provider} (Source: {provider_src})",
-        f"  Model:    {cfg.llm_model} (Source: {model_src})",
+        f"  Provider: {provider_val} (Source: {provider_src})",
+        f"  Model:    {model_val} (Source: {model_src})",
     ]
 
     if cfg.llm_provider == "vertex":
-        proj_src = project_item.source.value if project_item else "default"
-        loc_src = location_item.source.value if location_item else "default"
-        proj_val = cfg.gcp_project or "(not set)"
-        loc_val = cfg.gcp_location or "us-central1 (default)"
+        proj_src = escape(project_item.source.value if project_item else "default")
+        loc_src = escape(location_item.source.value if location_item else "default")
+        proj_val = escape(str(cfg.gcp_project or "(not set)"))
+        loc_val = escape(str(cfg.gcp_location or "us-central1 (default)"))
         lines.append(f"  Project:  {proj_val} (Source: {proj_src})")
         lines.append(f"  Location: {loc_val} (Source: {loc_src})")
         lines.append("  Auth:     Google ADC / Subprocess Token")
     else:
-        key_src = gemini_key_item.source.value if gemini_key_item else "default"
-        key_val = (
-            gemini_key_item.display_value()
-            if gemini_key_item and gemini_key_item.value
-            else "(not set)"
+        key_src = escape(gemini_key_item.source.value if gemini_key_item else "default")
+        key_val = escape(
+            str(
+                gemini_key_item.display_value()
+                if gemini_key_item and gemini_key_item.value
+                else "(not set)"
+            )
         )
         lines.append(f"  API Key:  {key_val} (Source: {key_src})")
 
@@ -441,10 +446,16 @@ def rewrite(
             # Resolve and validate Snowflake credentials if verify_loop is requested
             verifier: EquivalenceVerifier | None = None
             if verify_loop:
-                account = getattr(cfg, "snowflake_account", None) or os.environ.get("SNOWFLAKE_ACCOUNT")
+                account = getattr(cfg, "snowflake_account", None) or os.environ.get(
+                    "SNOWFLAKE_ACCOUNT"
+                )
                 user = getattr(cfg, "snowflake_user", None) or os.environ.get("SNOWFLAKE_USER")
-                database = getattr(cfg, "snowflake_database", None) or os.environ.get("SNOWFLAKE_DATABASE")
-                warehouse = getattr(cfg, "snowflake_warehouse", None) or os.environ.get("SNOWFLAKE_WAREHOUSE")
+                database = getattr(cfg, "snowflake_database", None) or os.environ.get(
+                    "SNOWFLAKE_DATABASE"
+                )
+                warehouse = getattr(cfg, "snowflake_warehouse", None) or os.environ.get(
+                    "SNOWFLAKE_WAREHOUSE"
+                )
                 password = getattr(cfg, "snowflake_password", None)
                 if not password:
                     try:
@@ -939,4 +950,3 @@ def config_show(
 
     console.print(table)
     raise typer.Exit(code=0)
-

@@ -210,4 +210,3 @@ def test_parse_replacement_failure_fallback(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(sqlglot, "parse_one", _mock_parse)
     issues = rule.check(ast)
     assert issues == []
-

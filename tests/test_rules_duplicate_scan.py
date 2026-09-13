@@ -149,11 +149,7 @@ class TestDuplicateTableScanRuleDetection:
 
     def test_description_mentions_cte_names(self) -> None:
         """The issue description must name the CTEs that cause the duplicate scan."""
-        sql = (
-            "WITH cte1 AS (SELECT * FROM orders), "
-            "cte2 AS (SELECT * FROM orders) "
-            "SELECT 1"
-        )
+        sql = "WITH cte1 AS (SELECT * FROM orders), cte2 AS (SELECT * FROM orders) SELECT 1"
         ast = _parse(sql)
         issues = RULE.check(ast)
 
@@ -164,11 +160,7 @@ class TestDuplicateTableScanRuleDetection:
 
     def test_description_mentions_table_name(self) -> None:
         """The issue description must mention the duplicated table name."""
-        sql = (
-            "WITH cte1 AS (SELECT * FROM orders), "
-            "cte2 AS (SELECT * FROM orders) "
-            "SELECT 1"
-        )
+        sql = "WITH cte1 AS (SELECT * FROM orders), cte2 AS (SELECT * FROM orders) SELECT 1"
         ast = _parse(sql)
         issues = RULE.check(ast)
 
@@ -177,11 +169,7 @@ class TestDuplicateTableScanRuleDetection:
 
     def test_target_node_is_cte(self) -> None:
         """The ``target_node`` must be an ``exp.CTE`` instance."""
-        sql = (
-            "WITH cte1 AS (SELECT * FROM orders), "
-            "cte2 AS (SELECT * FROM orders) "
-            "SELECT 1"
-        )
+        sql = "WITH cte1 AS (SELECT * FROM orders), cte2 AS (SELECT * FROM orders) SELECT 1"
         ast = _parse(sql)
         issues = RULE.check(ast)
 
@@ -190,11 +178,7 @@ class TestDuplicateTableScanRuleDetection:
 
     def test_is_not_replaceable(self) -> None:
         """Issue must not be auto-replaceable (``is_replaceable`` is False)."""
-        sql = (
-            "WITH cte1 AS (SELECT * FROM orders), "
-            "cte2 AS (SELECT * FROM orders) "
-            "SELECT 1"
-        )
+        sql = "WITH cte1 AS (SELECT * FROM orders), cte2 AS (SELECT * FROM orders) SELECT 1"
         ast = _parse(sql)
         issues = RULE.check(ast)
 
@@ -250,7 +234,6 @@ class TestDuplicateTableScanRuleDetection:
         assert issues == [], f"Expected no duplicate scan warnings but got: {issues}"
 
 
-
 # ---------------------------------------------------------------------------
 # Case-insensitivity tests
 # ---------------------------------------------------------------------------
@@ -261,11 +244,7 @@ class TestDuplicateTableScanRuleCaseSensitivity:
 
     def test_case_insensitive_table_names(self) -> None:
         """``ORDERS`` and ``orders`` must be treated as the same table."""
-        sql = (
-            "WITH cte1 AS (SELECT * FROM ORDERS), "
-            "cte2 AS (SELECT * FROM orders) "
-            "SELECT 1"
-        )
+        sql = "WITH cte1 AS (SELECT * FROM ORDERS), cte2 AS (SELECT * FROM orders) SELECT 1"
         ast = _parse(sql)
         issues = RULE.check(ast)
 
@@ -303,11 +282,7 @@ class TestDuplicateTableScanRuleMetadata:
 
     def test_snippet_is_non_empty(self) -> None:
         """The ``snippet`` field must be a non-empty string."""
-        sql = (
-            "WITH cte1 AS (SELECT * FROM orders), "
-            "cte2 AS (SELECT * FROM orders) "
-            "SELECT 1"
-        )
+        sql = "WITH cte1 AS (SELECT * FROM orders), cte2 AS (SELECT * FROM orders) SELECT 1"
         ast = _parse(sql)
         issues = RULE.check(ast)
 

@@ -169,4 +169,3 @@ def test_generic_sqlglot_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sqlglot, "parse_one", _raise_error)
     with pytest.raises(ParseError, match="SQL parsing failed"):
         parse_snowflake_sql("SELECT 1")
-

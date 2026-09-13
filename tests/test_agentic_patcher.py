@@ -389,4 +389,3 @@ def test_agentic_patcher_verify_loop_exhausted_retries_falls_back() -> None:
     # Fail-Safe: Original AST must be preserved intact
     assert updated_ast.sql(dialect="snowflake") == orig_sql
     assert "EXISTS" in updated_ast.sql(dialect="snowflake")
-

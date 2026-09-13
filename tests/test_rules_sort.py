@@ -193,4 +193,3 @@ def test_cte_without_this_expression() -> None:
     malformed_cte = exp.CTE(this=None)
     rule = RedundantSortRule()
     assert rule.check(malformed_cte) == []
-

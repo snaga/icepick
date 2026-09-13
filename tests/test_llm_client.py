@@ -270,7 +270,9 @@ class TestLLMClient:
         """Test that TimeoutExpired when running gcloud is handled gracefully."""
         import subprocess
 
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="gcloud", timeout=10)):
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="gcloud", timeout=10)
+        ):
             llm = LLMClient(provider="vertex", project="project")
             assert llm._get_vertex_token_from_gcloud() is None
 

@@ -32,6 +32,7 @@ __all__ = [
 # Win32 Credential Manager structures & bindings (Windows only)
 # =============================================================================
 
+
 class _FILETIME(ctypes.Structure):
     _fields_ = [
         ("dwLowDateTime", wintypes.DWORD),

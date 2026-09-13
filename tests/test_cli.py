@@ -156,7 +156,6 @@ class TestCli:
         assert "orig_not_in_opt" in result.output
         assert "opt_not_in_orig" in result.output
 
-
     def test_verify_read_error(self, tmp_path: Path) -> None:
         """Test verify error handling when reading SQL files fails."""
         orig_file = tmp_path / "orig.sql"
@@ -604,7 +603,9 @@ class TestCli:
             patch("icepick.cli.LLMClient", return_value=mock_llm),
             patch("icepick.cli.EquivalenceVerifier", return_value=mock_verifier),
         ):
-            result = runner.invoke(app, ["rewrite", str(sql_file), "--verify-loop", "--max-retries", "2"])
+            result = runner.invoke(
+                app, ["rewrite", str(sql_file), "--verify-loop", "--max-retries", "2"]
+            )
             assert result.exit_code == 0
             assert "No optimizable issues found" in result.output
             assert sql_file.read_text(encoding="utf-8") == original_sql
@@ -646,9 +647,7 @@ class TestCli:
             patch("icepick.cli.LLMClient", return_value=mock_llm),
             patch("icepick.cli.EquivalenceVerifier", return_value=mock_verifier),
         ):
-            result = runner.invoke(
-                app, ["rewrite", str(sql_file), "--verify-loop", "--json"]
-            )
+            result = runner.invoke(app, ["rewrite", str(sql_file), "--verify-loop", "--json"])
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["file"] == str(sql_file)
@@ -968,7 +967,9 @@ class TestCli:
             verification_sql="-- verification sql",
         )
 
-        with patch.object(EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result_ok):
+        with patch.object(
+            EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result_ok
+        ):
             result_ok = runner.invoke(app, ["verify", str(f1), str(f2), "--json"])
 
         assert result_ok.exit_code == 0
@@ -988,7 +989,9 @@ class TestCli:
             verification_sql="-- verification sql",
         )
 
-        with patch.object(EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result_diff):
+        with patch.object(
+            EquivalenceVerifier, "verify_with_snowflake", return_value=mock_result_diff
+        ):
             result_diff = runner.invoke(app, ["verify", str(f1), str(f2), "--json"])
 
         assert result_diff.exit_code == 1
@@ -1133,7 +1136,9 @@ class TestCli:
         assert "value" in data["llm_provider"]
         assert "source" in data["llm_provider"]
         assert "snowflake_password" in data
-        assert data["snowflake_password"]["value"] is None or "..." in str(data["snowflake_password"]["value"])
+        assert data["snowflake_password"]["value"] is None or "..." in str(
+            data["snowflake_password"]["value"]
+        )
 
         # Test with a masked secret environment variable
         result_secret = runner.invoke(
@@ -1147,5 +1152,3 @@ class TestCli:
         assert "..." in gemini_item["value"]
         assert "AIzaSySecretKeyExample1234567" not in gemini_item["value"]
         assert gemini_item["source"] == "env"
-
-

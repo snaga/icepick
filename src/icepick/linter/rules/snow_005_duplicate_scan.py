@@ -131,9 +131,7 @@ class DuplicateTableScanRule(BaseRule):
 
         # Collect all CTE definitions from the With node.
         cte_list: list[exp.CTE] = [
-            node
-            for node in with_node.expressions
-            if isinstance(node, exp.CTE)
+            node for node in with_node.expressions if isinstance(node, exp.CTE)
         ]
         if len(cte_list) < 2:
             # With only one CTE there can be no duplication.

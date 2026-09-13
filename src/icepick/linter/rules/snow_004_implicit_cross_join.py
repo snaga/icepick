@@ -48,9 +48,7 @@ from icepick.linter.base import BaseRule, DiagnosticIssue, Severity
 
 # Keys in Join.args that indicate the join type is explicit.
 # If ANY of these keys is present (and non-None), the join is not implicit.
-_EXPLICIT_JOIN_KEYS: frozenset[str] = frozenset(
-    {"kind", "side", "on", "using", "method"}
-)
+_EXPLICIT_JOIN_KEYS: frozenset[str] = frozenset({"kind", "side", "on", "using", "method"})
 
 
 def _is_lateral_or_table_function(node: exp.Expression | None) -> bool:
@@ -74,8 +72,7 @@ def _is_lateral_or_table_function(node: exp.Expression | None) -> bool:
     if node.find(exp.Lateral) is not None:
         return True
     if any(
-        isinstance(n, exp.Explode)
-        or (isinstance(n, exp.Anonymous) and n.name.upper() == "FLATTEN")
+        isinstance(n, exp.Explode) or (isinstance(n, exp.Anonymous) and n.name.upper() == "FLATTEN")
         for n in node.walk()
     ):
         return True

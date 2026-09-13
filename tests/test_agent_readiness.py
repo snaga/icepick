@@ -162,6 +162,39 @@ class TestAgentReadiness:
         assert "environment_variables" in data_ctx
         assert "credentials" in data_ctx
 
+        # 6. config show --json
+        res_cfg = runner.invoke(app, ["config", "show", "--json"])
+        assert res_cfg.exit_code == 0
+        data_cfg = _assert_valid_json_and_no_ansi(res_cfg.stdout)
+        assert isinstance(data_cfg, dict)
+        assert "llm_provider" in data_cfg
+        assert "llm_model" in data_cfg
+        assert "dialect" in data_cfg
+        assert data_cfg["llm_provider"]["value"] in ("gemini", "vertex")
+        assert "source" in data_cfg["llm_provider"]
+
+    def test_readiness_all_commands_help_succeeds(self) -> None:
+        """Verify that all commands and subcommands produce valid help messages and exit 0."""
+        commands_to_test = [
+            ["--help"],
+            ["check", "--help"],
+            ["rewrite", "--help"],
+            ["patch", "--help"],
+            ["verify", "--help"],
+            ["feedback", "--help"],
+            ["agent-context", "--help"],
+            ["config", "--help"],
+            ["config", "show", "--help"],
+        ]
+        for cmd in commands_to_test:
+            result = runner.invoke(app, cmd)
+            assert result.exit_code == 0, f"Command {cmd} failed with exit code {result.exit_code}"
+            assert (
+                "Usage" in result.stdout
+                or "Options" in result.stdout
+                or "Commands" in result.stdout
+            )
+
     def test_readiness_actionable_error_on_missing_credentials(
         self,
         tmp_path: Path,

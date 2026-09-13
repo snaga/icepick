@@ -68,4 +68,3 @@ class AuthenticationError(IcepickError):
         self.message = message
         self.key_name = key_name
         super().__init__(message)
-
