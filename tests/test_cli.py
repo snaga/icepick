@@ -13,6 +13,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from icepick import __version__
 from icepick.cli import app
 from icepick.exceptions import AuthenticationError
+from icepick.health import ConnectionHealthReport, ServiceTestResult
 from icepick.verifier.equivalence import EquivalenceVerifier, VerificationResult
 
 runner = CliRunner()
@@ -1369,3 +1370,246 @@ class TestCli:
         assert "..." in gemini_item["value"]
         assert "AIzaSySecretKeyExample1234567" not in gemini_item["value"]
         assert gemini_item["source"] == "env"
+
+    def test_config_test_all_success(self) -> None:
+        """Test icepick config test runs all checks by default and prints table on success."""
+        mock_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=True,
+                    duration_ms=123.4,
+                    message="Successfully connected to LLM provider.",
+                    details={"provider": "gemini", "model": "gemini-3.8-flash"},
+                ),
+                "snowflake": ServiceTestResult(
+                    service="snowflake",
+                    success=True,
+                    duration_ms=456.7,
+                    message="Successfully connected to Snowflake.",
+                    details={"version": "8.15.0", "user": "TEST_USER", "warehouse": "TEST_WH"},
+                ),
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            result = runner.invoke(app, ["config", "test"])
+            assert result.exit_code == 0
+            mock_tester.test_all.assert_called_once()
+            call_kwargs = mock_tester.test_all.call_args.kwargs
+            assert call_kwargs["targets"] == ["llm", "snowflake"]
+            assert "Icepick Connection Health Check" in result.output
+            assert "PASS" in result.output
+            assert "123.4ms" in result.output
+            assert "456.7ms" in result.output
+            assert "provider=gemini" in result.output
+            assert "version=8.15.0" in result.output
+
+    def test_config_test_llm_only(self) -> None:
+        """Test icepick config test --llm checks only LLM connection."""
+        mock_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=True,
+                    duration_ms=99.5,
+                    message="Connected.",
+                    details={"provider": "gemini"},
+                )
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            result = runner.invoke(app, ["config", "test", "--llm"])
+            assert result.exit_code == 0
+            call_kwargs = mock_tester.test_all.call_args.kwargs
+            assert call_kwargs["targets"] == ["llm"]
+            assert "LLM" in result.output
+            assert "SNOWFLAKE" not in result.output
+
+    def test_config_test_snowflake_only(self) -> None:
+        """Test icepick config test --snowflake checks only Snowflake connection."""
+        mock_report = ConnectionHealthReport(
+            results={
+                "snowflake": ServiceTestResult(
+                    service="snowflake",
+                    success=True,
+                    duration_ms=250.0,
+                    message="Connected.",
+                    details={"version": "8.15.0"},
+                )
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            result = runner.invoke(app, ["config", "test", "--snowflake"])
+            assert result.exit_code == 0
+            call_kwargs = mock_tester.test_all.call_args.kwargs
+            assert call_kwargs["targets"] == ["snowflake"]
+            assert "SNOWFLAKE" in result.output
+            assert "LLM" not in result.output
+
+    def test_config_test_both_flags(self) -> None:
+        """Test icepick config test with both --llm and --snowflake tests both services."""
+        mock_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=True,
+                    duration_ms=80.0,
+                    message="Connected.",
+                ),
+                "snowflake": ServiceTestResult(
+                    service="snowflake",
+                    success=True,
+                    duration_ms=150.0,
+                    message="Connected.",
+                ),
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            result = runner.invoke(app, ["config", "test", "--llm", "--snowflake"])
+            assert result.exit_code == 0
+            call_kwargs = mock_tester.test_all.call_args.kwargs
+            assert call_kwargs["targets"] == ["llm", "snowflake"]
+
+    def test_config_test_target_option(self) -> None:
+        """Test icepick config test --target parses targets correctly."""
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester_cls.return_value = mock_tester
+
+            mock_tester.test_all.return_value = ConnectionHealthReport(
+                results={"llm": ServiceTestResult("llm", True, 50.0, "OK")}
+            )
+            res_llm = runner.invoke(app, ["config", "test", "--target", "llm"])
+            assert res_llm.exit_code == 0
+            assert mock_tester.test_all.call_args.kwargs["targets"] == ["llm"]
+
+            mock_tester.test_all.return_value = ConnectionHealthReport(
+                results={"snowflake": ServiceTestResult("snowflake", True, 60.0, "OK")}
+            )
+            res_sf = runner.invoke(app, ["config", "test", "-t", "snowflake"])
+            assert res_sf.exit_code == 0
+            assert mock_tester.test_all.call_args.kwargs["targets"] == ["snowflake"]
+
+            mock_tester.test_all.return_value = ConnectionHealthReport(
+                results={
+                    "llm": ServiceTestResult("llm", True, 50.0, "OK"),
+                    "snowflake": ServiceTestResult("snowflake", True, 60.0, "OK"),
+                }
+            )
+            res_all = runner.invoke(app, ["config", "test", "-t", "all"])
+            assert res_all.exit_code == 0
+            assert mock_tester.test_all.call_args.kwargs["targets"] == ["llm", "snowflake"]
+
+    def test_config_test_invalid_target_error(self) -> None:
+        """Test icepick config test with invalid target exits with 1 and shows actionable advice."""
+        result = runner.invoke(app, ["config", "test", "--target", "invalid_svc"])
+        assert result.exit_code == 1
+        combined = result.output + (result.stderr or "")
+        assert "Invalid target 'invalid_svc'" in combined
+        assert "Valid targets are 'all', 'llm', 'snowflake'" in combined
+        assert "Actionable Advice:" in combined
+
+    def test_config_test_failure_exits_1_with_advice(self) -> None:
+        """Test icepick config test exits with 1 and displays advice panel when a check fails."""
+        mock_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=False,
+                    duration_ms=45.0,
+                    message="Gemini API key is invalid.",
+                    actionable_advice="Run cmdkey /generic:icepick:gemini /user:apikey /pass:<key> to register.",
+                ),
+                "snowflake": ServiceTestResult(
+                    service="snowflake",
+                    success=True,
+                    duration_ms=180.0,
+                    message="Connected.",
+                ),
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            result = runner.invoke(app, ["config", "test"])
+            assert result.exit_code == 1
+            assert "FAIL" in result.output
+            assert "Gemini API key is invalid" in result.output
+            assert "Actionable Advice: LLM" in result.output
+            assert "cmdkey /generic:icepick:gemini" in result.output
+
+    def test_config_test_json_output(self) -> None:
+        """Test icepick config test --json outputs structured JSON report."""
+        mock_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=True,
+                    duration_ms=120.0,
+                    message="Connected.",
+                    details={"provider": "gemini", "model": "gemini-3.8-flash"},
+                )
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            res_pass = runner.invoke(app, ["config", "test", "--llm", "--json"])
+            assert res_pass.exit_code == 0
+            data_pass = json.loads(res_pass.output)
+            assert data_pass["all_passed"] is True
+            assert "llm" in data_pass["results"]
+            assert data_pass["results"]["llm"]["success"] is True
+            assert data_pass["results"]["llm"]["details"]["model"] == "gemini-3.8-flash"
+
+        mock_fail_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=False,
+                    duration_ms=40.0,
+                    message="Authentication error",
+                    actionable_advice="Set GEMINI_API_KEY",
+                )
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_fail_report
+            mock_tester_cls.return_value = mock_tester
+
+            res_fail = runner.invoke(app, ["config", "test", "--llm", "--json"])
+            assert res_fail.exit_code == 1
+            data_fail = json.loads(res_fail.output)
+            assert data_fail["all_passed"] is False
+            assert data_fail["results"]["llm"]["success"] is False
+            assert data_fail["results"]["llm"]["actionable_advice"] == "Set GEMINI_API_KEY"
+
+    def test_config_test_config_load_error(self, tmp_path: Path) -> None:
+        """Test icepick config test exits with 1 when configuration file cannot be loaded."""
+        non_existent = tmp_path / "non_existent_config.toml"
+        result = runner.invoke(app, ["config", "test", "--config", str(non_existent)])
+        assert result.exit_code == 1
+        combined = result.output + (result.stderr or "")
+        assert "Configuration Error:" in combined
+

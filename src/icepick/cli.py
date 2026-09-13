@@ -25,6 +25,7 @@ from icepick.credentials import format_actionable_pair_error, resolve_credential
 from icepick.diff import apply_unified_diff, format_diff, render_diff, split_hunks
 from icepick.exceptions import AuthenticationError, ParseError
 from icepick.feedback import FeedbackRecorder
+from icepick.health import ConnectionTester
 from icepick.linter.base import DiagnosticIssue, Severity
 from icepick.linter.engine import LinterEngine
 from icepick.linter.rules import (
@@ -996,4 +997,127 @@ def config_show(
         table.add_row(key, val, item.source.value, is_sec)
 
     console.print(table)
+    raise typer.Exit(code=0)
+
+
+@config_app.command("test")
+def test_config(
+    target: str = typer.Option(
+        "all",
+        "--target",
+        "-t",
+        help="Target service to test ('all', 'llm', 'snowflake').",
+    ),
+    llm_only: bool = typer.Option(
+        False,
+        "--llm",
+        help="Test LLM connection only.",
+    ),
+    snowflake_only: bool = typer.Option(
+        False,
+        "--snowflake",
+        help="Test Snowflake connection only.",
+    ),
+    timeout: float = typer.Option(
+        10.0,
+        "--timeout",
+        help="Timeout in seconds for each connection check.",
+    ),
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to configuration file.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Output health report as structured JSON.",
+    ),
+) -> None:
+    """Test connectivity, latency, and authentication for LLM and Snowflake services."""
+    # Resolve target services to test
+    # Specific flags (--llm, --snowflake) take precedence over general --target option
+    if llm_only and snowflake_only:
+        targets = ["llm", "snowflake"]
+    elif llm_only:
+        targets = ["llm"]
+    elif snowflake_only:
+        targets = ["snowflake"]
+    else:
+        normalized_target = target.strip().lower()
+        if normalized_target == "all":
+            targets = ["llm", "snowflake"]
+        elif normalized_target == "llm":
+            targets = ["llm"]
+        elif normalized_target == "snowflake":
+            targets = ["snowflake"]
+        else:
+            err_console.print(
+                f"[bold red]Error:[/bold red] Invalid target '{target}'. "
+                "Valid targets are 'all', 'llm', 'snowflake'."
+            )
+            err_console.print(
+                "[yellow]Actionable Advice:[/yellow] Specify one of 'all', 'llm', or 'snowflake' for --target."
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        resolver = ConfigResolver(config_file=config)
+        cfg, _ = resolver.resolve()
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    tester = ConnectionTester()
+    report = tester.test_all(cfg=cfg, targets=targets, timeout=timeout)
+
+    if json_output:
+        typer.echo(json.dumps(report.to_dict(), indent=2))
+        if not report.all_passed:
+            raise typer.Exit(code=1)
+        raise typer.Exit(code=0)
+
+    # Render summary table for interactive terminal output
+    table = Table(
+        title="Icepick Connection Health Check",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Service", style="bold")
+    table.add_column("Status", justify="center")
+    table.add_column("Latency", justify="right")
+    table.add_column("Details")
+
+    for service, result in report.results.items():
+        status_style = (
+            "[bold green]PASS[/bold green]" if result.success else "[bold red]FAIL[/bold red]"
+        )
+        latency_str = f"{result.duration_ms:.1f}ms"
+        details_items = [
+            f"{k}={v}" for k, v in result.details.items() if v and k != "response_snippet"
+        ]
+        details_str = ", ".join(details_items) if details_items else "-"
+        table.add_row(service.upper(), status_style, latency_str, details_str)
+
+    console.print(table)
+
+    # If any service failed, output actionable advice panel
+    for result in report.results.values():
+        if not result.success:
+            advice_content = f"[bold red]Error:[/bold red] {result.message}"
+            if result.actionable_advice:
+                advice_content += (
+                    f"\n\n[yellow]Actionable Advice:[/yellow]\n{result.actionable_advice}"
+                )
+            console.print(
+                Panel(
+                    advice_content,
+                    title=f"Actionable Advice: {result.service.upper()}",
+                    border_style="red",
+                )
+            )
+
+    if not report.all_passed:
+        raise typer.Exit(code=1)
     raise typer.Exit(code=0)
