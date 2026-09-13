@@ -42,6 +42,7 @@ class TestAgentContextUnit:
             "check",
             "diag",
             "diff",
+            "fix",
             "rewrite",
             "patch",
             "verify",
@@ -50,7 +51,6 @@ class TestAgentContextUnit:
             "config",
         }
         assert expected_commands.issubset(commands.keys())
-        assert "fix" not in commands
 
         for cmd_name in expected_commands:
             cmd_info = commands[cmd_name]
@@ -86,6 +86,20 @@ class TestAgentContextUnit:
         assert diff_opts["--output"]["flag"] == "-o"
         assert "--dialect" in diff_opts
         assert "--config" in diff_opts
+
+        # Check arguments and options for 'fix'
+        assert "file" in commands["fix"]["arguments"]
+        assert commands["fix"]["arguments"]["file"]["required"] is True
+        fix_opts = commands["fix"]["options"]
+        assert "--rx" in fix_opts
+        assert fix_opts["--rx"]["type"] == "str"
+        assert "--dry-run" in fix_opts
+        assert fix_opts["--dry-run"]["type"] == "bool"
+        assert "--force" in fix_opts
+        assert fix_opts["--force"]["flag"] == "-f"
+        assert fix_opts["--force"]["type"] == "bool"
+        assert "--dialect" in fix_opts
+        assert "--config" in fix_opts
 
         # Check options for 'rewrite'
         rewrite_opts = commands["rewrite"]["options"]

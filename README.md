@@ -235,7 +235,40 @@ icepick diff models/batch_mart.sql --rx RX-001 -o patches/rx001.patch
 
 ---
 
-### 4. クエリの最適化（Unified Diff 出力）(`rewrite`)
+### 4. 処方箋ID選択型ファイル直接適用 (`fix`)
+`diag` で提示された処方箋（Prescription）を、**対象の SQL ファイルへ直接インプレース適用**します（要件 G-3, ADR-0005）。
+`TextSplicer` により元のインデント、コメント、改行などの書式を 100% 保持したまま、指定された最適化のみを外科手術的に反映します。
+
+#### 全処方箋を元ファイルに直接適用する
+```bash
+icepick fix models/batch_mart.sql --force
+```
+
+#### 特定の処方箋のみを局所狙い撃ち適用する (`--rx`)
+指定した処方箋 ID（カンマ区切りで複数指定可能）のみをファイルに適用し、他の箇所は完全に元のコードを維持します。
+```bash
+# RX-001 のみを局所適用
+icepick fix models/batch_mart.sql --rx RX-001 --force
+
+# RX-001 と RX-003 を同時に適用
+icepick fix models/batch_mart.sql --rx RX-001,RX-003 --force
+```
+*(※ 存在しない処方箋 ID を指定した場合は、利用可能な ID 一覧付きのエラーが表示され終了コード `1` を返します)*
+
+#### 差分シミュレーション (`--dry-run`)
+実ファイルを一切改変せずに、適用される Unified Diff と処方箋一覧をターミナルで確認します。
+```bash
+icepick fix models/batch_mart.sql --rx RX-001 --dry-run
+```
+
+#### 🛡️ 破壊的操作ガード (`--force` / `-f`)
+ファイル直接更新（インプレース修正）の事故を防ぐため、安全ガード（要件 E-6）を備えています:
+* **対話環境 (TTY)**: `--force` がない場合、`Are you sure you want to modify ... in-place? [y/N]` の確認プロンプトが表示されます。
+* **非対話環境 / CI / AI エージェント (非 TTY)**: 誤爆防止のため `--force` が必須です。指定がない場合はエラー（終了コード `1`）となりファイルは変更されません。
+
+---
+
+### 5. クエリの最適化（Unified Diff 出力）(`rewrite`)
 元ファイルを一切改変せず、AST に基づく最適化の差分（Unified Diff）を標準出力またはファイルに出力します。
 
 #### ターミナルで差分を確認する (Read-Only)
@@ -304,7 +337,7 @@ icepick rewrite models/batch_mart.sql --agentic -p vertex -m gemini-1.5-pro
 
 ---
 
-### 5. パッチの適用 (`patch`)
+### 6. パッチの適用 (`patch`)
 Unified Diff を指定の SQL ファイルに外科手術的に適用します。
 
 #### パッチファイルから適用する
@@ -332,7 +365,7 @@ icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run
 
 ---
 
-### 6. セマンティクス等価性検証 SQL の生成 (`verify`)
+### 7. セマンティクス等価性検証 SQL の生成 (`verify`)
 元クエリと最適化クエリが同一の結果セットを返すことを証明するための双方向 `EXCEPT` 検証クエリを決定論的・数学的に生成します（ADR-0004: クレデンシャル不要・純粋 SQL 生成モデル）。
 
 Icepick 自体は Snowflake への直接接続を行わないため、**データベース認証情報・パスワードは一切不要**です。生成された SQL は、開発者が使い慣れた Snowflake CLI (`snow sql`) や `snowsql` にパイプまたはファイル渡しで安全に実行できます。
@@ -371,7 +404,7 @@ SELECT
 
 ---
 
-### 7. エージェント親和性とフィードバックループ (`Agent-Native DX`)
+### 8. エージェント親和性とフィードバックループ (`Agent-Native DX`)
 
 Icepick は、人間だけでなく AI コーディングエージェント（Claude Code, Cursor, Antigravity 等）が自律的かつ安全に利用できるよう設計されています。
 
@@ -392,8 +425,8 @@ icepick feedback "CTE抽出の順序が直感的でわかりやすい" --categor
 ```
 
 #### 破壊的操作の明示的境界 (`--dry-run` & `--force`)
-* `--dry-run`: 実ファイルへの書き込みを安全にスキップし、差分プレビューのみを出力。
-* `--force` / `-f`: パイプラインや非対話環境（stdin 非 TTY）で `patch` を実行する際は、誤爆防止のため `--force` が必須。
+* `--dry-run`: 実ファイルへの書き込みを安全にスキップし、差分プレビューのみを出力（`fix`, `patch`）。
+* `--force` / `-f`: パイプラインや非対話環境（stdin 非 TTY）でファイル変更コマンド（`fix`, `patch`）を実行する際は、誤爆防止のため `--force` が必須。
 
 #### 構造化出力 (`--json`)
 すべての主要コマンドで `--json` をサポート。装飾なしの純粋な JSON が `stdout` に出力され、ログやエラーは `stderr` に分離されます。

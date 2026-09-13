@@ -133,6 +133,47 @@ def get_agent_context() -> dict[str, Any]:
                     },
                 },
             },
+            "fix": {
+                "description": "Apply optimization prescriptions in-place to Snowflake SQL file.",
+                "arguments": {
+                    "file": {
+                        "type": "Path",
+                        "required": True,
+                        "description": "Path to Snowflake SQL file to fix in-place.",
+                    }
+                },
+                "options": {
+                    "--rx": {
+                        "type": "str",
+                        "default": None,
+                        "description": "Comma-separated prescription IDs to apply (e.g. 'RX-001,RX-003'). If omitted, all prescriptions are applied.",
+                    },
+                    "--dry-run": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Simulate fix without modifying the target SQL file.",
+                    },
+                    "--force": {
+                        "flag": "-f",
+                        "type": "bool",
+                        "default": False,
+                        "description": "Bypass confirmation in non-interactive / agent environments.",
+                    },
+                    "--dialect": {
+                        "flag": "-d",
+                        "type": "str",
+                        "default": "snowflake",
+                        "choices": ["snowflake", "postgres", "duckdb", "bigquery"],
+                        "description": "SQL dialect (default: snowflake).",
+                    },
+                    "--config": {
+                        "flag": "-c",
+                        "type": "Path",
+                        "default": None,
+                        "description": "Path to configuration file (.json or .toml).",
+                    },
+                },
+            },
             "rewrite": {
                 "description": "Optimize Snowflake SQL queries and output Unified Diff (read-only).",
                 "arguments": {
