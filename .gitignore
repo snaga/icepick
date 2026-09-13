@@ -59,6 +59,6 @@ Thumbs.db
 .gemini/
 AGENTS.md
 
-
-
-
+# Local configuration files
+.icepick.toml
+icepick.json

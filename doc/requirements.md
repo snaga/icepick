@@ -180,15 +180,16 @@
    - 受け入れ基準
       - 標準入力（stdin）が対話型ターミナル（TTY）でない環境で実行されたとき、システムはユーザー入力を待つ対話プロンプトを表示して停止してはならず、自動的に非対話モードとして安全に処理を完了するか、明確なエラーメッセージを出力して終了しなければならない。
 
-- 要件 E-4: セキュアなクレデンシャル解決（厳格な優先順位ピラミッド）
+- 要件 E-4: セキュアなクレデンシャル解決（Snowflake 認証情報の WCM ペア管理と厳格な優先順位ピラミッド）
    - ユーザーストーリー
-      - 私はセキュリティ管理者として、APIキーやSnowflake認証情報を平文ファイルやコマンドライン引数に残さず、また意図しないグローバル環境変数の誤読込みを防ぎつつ安全に解決させたい。なぜなら秘密情報の漏洩や環境汚染による誤動作を防ぐためだ。
+      - 私はセキュリティ管理者および開発者として、APIキーや Snowflake 認証情報（ユーザ名・パスワード）が設定ファイルや環境変数に分散して混ざる混乱を防ぎ、OS ネイティブの安全なストレージでセット管理させたい。なぜなら秘密情報の漏洩や設定の断片化による誤動作・事故を防ぐためだ。
    - 受け入れ基準
-      - システムが認証情報（Gemini APIキー、Snowflake認証等）を解決するとき、標準の汎用環境変数は意図的に無視し、以下の厳格な優先順位に従って探索しなければならない：
-         1. デバッグ/CI専用環境変数（`DEBUG_ICEPICK_` プレフィックス必須。例: `DEBUG_ICEPICK_GEMINI_API_KEY`）
-         2. Windows 資格情報マネージャー（Target: `icepick:<key>`。例: `icepick:gemini_api_key`）
+      - システムが Snowflake 認証情報（`snowflake_user`, `snowflake_password`）を解決するとき、設定ファイル（`.icepick.toml`, `icepick.json`）や汎用の環境変数（`SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` 等）からの読み込みは意図的に排除し、以下の厳格な優先順位に従ってペアとして探索しなければならない：
+         1. デバッグ/CI専用環境変数（`DEBUG_ICEPICK_SNOWFLAKE_USER`, `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD`）
+         2. Windows 資格情報マネージャー（Target: `icepick:snowflake`。UserName フィールドからユーザ名、CredentialBlob からパスワードを一括解決）
       - Windows 資格情報マネージャーから読み込むとき、システムは `cmdkey` による UTF-16LE（null バイト混入）を自動判定して正常な文字列にデコードしなければならない。
-      - いずれからも認証情報を解決できないとき、システムはシェル履歴に平文を残さない安全なPowerShell登録例および `cmdkey` 例を含む自己修正エラー（Actionable Error）を出力して異常終了しなければならない。
+      - Snowflake 認証情報が WCM およびデバッグ環境変数のいずれからも解決できないとき、システムはシェル履歴に平文を残さない安全な PowerShell 登録例（`Get-Credential` 経由）および `cmdkey` 例を含む自己修正エラー（Actionable Error）を出力して異常終了しなければならない。
+      - Gemini API キー（`gemini_api_key`）についても同様に、汎用環境変数は無視し、デバッグ環境変数（`DEBUG_ICEPICK_GEMINI_API_KEY`）または WCM（`icepick:gemini_api_key`）からのみ解決しなければならない。
 
 - 要件 E-5: 機械可読イントロスペクション (`icepick agent-context`)
    - ユーザーストーリー

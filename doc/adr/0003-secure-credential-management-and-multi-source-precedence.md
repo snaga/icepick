@@ -38,11 +38,16 @@ Icepick では、LLM 局所リライト（Gemini / Vertex AI）および Snowfla
 【ベース】 5. 組み込みデフォルト (gemini, gemini-3.8-flash, us-central1)
 ```
 
-### ② Windows 資格情報マネージャー (WCM) によるゼロ・平文ストレージ
-- 機密情報（`gemini_api_key`, `snowflake_password`）は、ファイルではなく OS ネイティブの **Windows 資格情報マネージャー（Target: `icepick:*`）** に保存・解決します。
-- 登録コマンド案内時も、PowerShell の `Get-Credential` を用いたマスク入力手順を推奨し、シェル履歴への平文残留を防止します。
+### ② Windows 資格情報マネージャー (WCM) によるゼロ・平文ストレージと Snowflake ペア管理
+- 機密情報（`gemini_api_key`, `snowflake_user`, `snowflake_password`）は、設定ファイルや一般環境変数から完全に除外し、OS ネイティブの **Windows 資格情報マネージャー（Target: `icepick:*`）** に保存・解決します。
+- 特に Snowflake 認証情報については、ユーザ名とパスワードを単一ターゲット **`icepick:snowflake`**（`UserName` にユーザ名、`CredentialBlob` にパスワード）としてセット保管・一括取得します。
+- 登録コマンド案内時も、PowerShell の `Get-Credential` を用いたマスク入力手順を推奨し、シェル履歴への平文残留を防止します：
+  ```powershell
+  $cred = Get-Credential -Message "Enter Snowflake Credentials"
+  cmdkey /generic:icepick:snowflake /user:$($cred.UserName) /pass:$($cred.GetNetworkCredential().Password)
+  ```
 - Windows の `cmdkey` 特有の UTF-16LE（Null Byte `0x00`）混入は、Icepick 内部で自動検知・安全にデコードします。
-- CI/CD や一時デバッグに限り、意図的な誤読込みを防ぐため `DEBUG_ICEPICK_` プレフィックス付き環境変数での上書きのみを特別に許可します。
+- CI/CD や一時デバッグに限り、意図的な誤読込みを防ぐため `DEBUG_ICEPICK_` プレフィックス付き環境変数（`DEBUG_ICEPICK_SNOWFLAKE_USER`, `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD`）での上書きのみを特別に許可します。
 
 ### ③ 実行時アクティブコンフィグ・フィードバック (Active Configuration Feedback)
 - `--agentic` や `--verify-loop` 実行時、アクティブな設定（プロバイダ、モデル、GCPプロジェクト、ロケーション、認証方式）および**「その設定がどのレイヤーで決定されたか（CLI / ENV / FILE / KEYRING / DEFAULT）」**をターミナルに Rich バナーで明示します。

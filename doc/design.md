@@ -228,26 +228,47 @@ class OptimizationResult:
 ### 3.8 セキュア認証情報プロバイダ (Secure Credential Management)
 - 対応要件: E-4
 - **厳格な優先順位ピラミッド (The Strict Priority Pyramid)**:
-  1. 一時デバッグ/CI用環境変数（`DEBUG_ICEPICK_` プレフィックス必須。例: `DEBUG_ICEPICK_GEMINI_API_KEY`, `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD`）
-  2. Windows 資格情報マネージャー（Target: `icepick:gemini_api_key`, `icepick:snowflake_password`）
-  ※意図しないグローバル環境変数や他ツールの認証情報の誤読込み・混入を防ぐため、一般的な名前（`GEMINI_API_KEY` 等）は意図的に探索対象から除外する。
+  1. 一時デバッグ/CI用環境変数（`DEBUG_ICEPICK_` プレフィックス必須。例: `DEBUG_ICEPICK_GEMINI_API_KEY`, `DEBUG_ICEPICK_SNOWFLAKE_USER`, `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD`）
+  2. Windows 資格情報マネージャー（Target: `icepick:gemini_api_key`, `icepick:snowflake`）
+  ※意図しないグローバル環境変数（`GEMINI_API_KEY`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` 等）や設定ファイルへの平文記載は、混入・漏洩・混乱防止のため探索対象から完全に除外する。
+- **Snowflake 認証情報の WCM ペア管理 (`icepick:snowflake`)**:
+  - Win32 API `CredReadW` が返す `_CREDENTIALW` 構造体は、ユーザー名（`UserName`）とパスワード（`CredentialBlob`）の双方を保持できる。
+  - したがって、単一のターゲット `icepick:snowflake` にユーザー名とパスワードをペアで登録・取得する設計とする：
+    - `read_wcm_credential_pair(target: str) -> tuple[str, str] | None`: `(username, password)` を返却。
+    - `resolve_credential_pair(key_name: str = "snowflake", app_prefix: str = "icepick") -> tuple[str, str, str]`: `(username, password, source_description)` を解決。
 - **UTF-16LE / Null Byte トラップ対策**:
-  - Windows `cmdkey` 登録時に混入する UTF-16LE（null バイト `0x00`）を自動検知し、安全にデコードして HTTP リクエストのヘッダー破壊を防ぐ。
+  - Windows `cmdkey` 登録時に混入する UTF-16LE（null バイト `0x00`）を自動検知し、安全にデコードして HTTP リクエストヘッダーや DB 接続文字列の破壊を防ぐ。
 - **Actionable な認証エラーとセキュア登録案内**:
   - 認証情報が取得できない場合、シェル履歴に残さない安全な登録コマンドを含む具体的な自己修正手順を提示して exit code 1 で終了：
-    ```text
-    [Authentication Error] Gemini API Key is missing.
-    To fix this, please register your key using Windows Credential Manager:
-      # Recommended (safe, masked input without leaving secrets in history):
-      $cred = Get-Credential -UserName "any" -Message "Enter Gemini API Key"
-      cmdkey /generic:icepick:gemini_api_key /user:any /pass:$($cred.GetNetworkCredential().Password)
+    - **Snowflake 認証未設定時**:
+      ```text
+      [Authentication Error] Snowflake credentials (user and password) are missing or invalid.
+      To fix this, please register your Snowflake credentials in Windows Credential Manager:
+        # Recommended (safe, masked password input without leaving secrets in history):
+        $cred = Get-Credential -Message "Enter Snowflake Credentials"
+        cmdkey /generic:icepick:snowflake /user:$($cred.UserName) /pass:$($cred.GetNetworkCredential().Password)
 
-      # Direct command:
-      cmdkey /generic:icepick:gemini_api_key /user:any /pass:<your_key>
+        # Direct command:
+        cmdkey /generic:icepick:snowflake /user:<snowflake_user> /pass:<snowflake_password>
 
-    Or set the debug environment variable:
-      $env:DEBUG_ICEPICK_GEMINI_API_KEY="<your_key>"
-    ```
+      Or set the debug environment variables:
+        $env:DEBUG_ICEPICK_SNOWFLAKE_USER="<snowflake_user>"
+        $env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="<snowflake_password>"
+      ```
+    - **Gemini API キー未設定時**:
+      ```text
+      [Authentication Error] Gemini API Key is missing.
+      To fix this, please register your key using Windows Credential Manager:
+        # Recommended (safe, masked input without leaving secrets in history):
+        $cred = Get-Credential -UserName "any" -Message "Enter Gemini API Key"
+        cmdkey /generic:icepick:gemini_api_key /user:any /pass:$($cred.GetNetworkCredential().Password)
+
+        # Direct command:
+        cmdkey /generic:icepick:gemini_api_key /user:any /pass:<your_key>
+
+      Or set the debug environment variable:
+        $env:DEBUG_ICEPICK_GEMINI_API_KEY="<your_key>"
+      ```
 
 ### 3.9 エージェント準備状況テスト (Agent Readiness Test)
 - 対応要件: E-8
@@ -257,13 +278,18 @@ class OptimizationResult:
   3. **Actionable Error検証**: 認証未設定時および不正引数指定時に、有効な enum 一覧および復旧コマンド例が出力に含まれていることを検証。
 
 ### 3.10 `ConfigResolver` & 実行時コンフィグ・フィードバック (`icepick/config.py` または `cli.py`)
-- 対応要件: E-9, C-4
+- 対応要件: E-9, C-4, E-4
 - **優先順位ピラミッド (Configuration Precedence)**:
   1. **CLI オプション**: `--provider` (`-p`), `--model` (`-m`), `--timeout` (`-t`), `--dialect` (`-d`) 等
-  2. **環境変数**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `SNOWFLAKE_*` 等
-  3. **設定ファイル**: `--config` 指定ファイル、または暗黙の `.icepick.toml` / `icepick.json`
-  4. **セキュア認証情報**: Windows 資格情報マネージャー（WCM: `icepick:*`）
+  2. **環境変数**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_DATABASE` 等（※機密項目を除く）
+  3. **設定ファイル**: `--config` 指定ファイル、または暗黙の `.icepick.toml` / `icepick.json`（インフラ構成のみ。認証情報は記載不可・無視）
+  4. **セキュア認証情報**: Windows 資格情報マネージャー（WCM: `icepick:gemini_api_key`, `icepick:snowflake`）
   5. **組み込みデフォルト値**: `llm_provider="gemini"`, `llm_model="gemini-3.8-flash"`, `location="us-central1"` 等
+- **機密項目（`SECRET_KEYS`）の特別解決ルール**:
+  - `SECRET_KEYS = {"gemini_api_key", "snowflake_user", "snowflake_password"}`
+  - 設定ファイルや汎用環境変数（`SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` 等）にはシークレットを配置させず、混在による混乱を防止する。
+  - 機密項目の解決経路は「1. デバッグ環境変数（`DEBUG_ICEPICK_*`）」または「2. WCM（`icepick:snowflake` / `icepick:gemini_api_key`）」のみに限定する。
+  - `snowflake_user` と `snowflake_password` は WCM のターゲット `icepick:snowflake` から一括ペア解決され、ともに `is_secret=True` としてマスク保護される。
 - **IPO 記述**:
   - **Input**: CLI 引数、明示的/暗黙の設定ファイルパス、環境変数辞書、WCM
   - **Processing**:
@@ -275,7 +301,7 @@ class OptimizationResult:
     - マージ済み `Config` インスタンス
     - `RuntimeConfigSummary`（キー、値、ソース、マスク済み機密情報）
 - **確認コマンド (`icepick config show`)**:
-  - 現在解決されている全設定項目（LLM設定、Snowflake設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。
+  - 現在解決されている全設定項目（LLM設定、Snowflake設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。機密項目は `display_value` でマスクされる。
 
 ## 4. シーケンス図（対話型リファクタリングフロー）
 
