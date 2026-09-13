@@ -1,6 +1,61 @@
 # 詳細設計書 (design.md)
 
-## 1. システムアーキテクチャ概要
+## 目次
+- [機能一覧](#機能一覧)
+- [アーキテクチャ](#アーキテクチャ)
+- [データモデル](#データモデル)
+- [機能詳細](#機能詳細)
+  - [LinterEngine (icepick/linter/)](#linterengine-icepicklinter)
+  - [ASTPatcher & SubqueryToCTE (icepick/patcher/)](#astpatcher--subquerytocte-icepickpatcher)
+  - [ContextSlicer, LLMClient & プラガブルプロバイダ基盤 (icepick/llm/)](#contextslicer-llmclient--プラガブルプロバイダ基盤-icepickllm)
+  - [DiffFormatter & TextSplicer (icepick/diff/, icepick/patcher/)](#diffformatter--textsplicer-icepickdiff-icepickpatcher)
+  - [EquivalenceVerifier / 検証 SQL 生成器 (icepick/verifier/)](#equivalenceverifier--検証-sql-生成器-icepickverifier)
+  - [FeedbackRecorder (icepick/feedback.py)](#feedbackrecorder-icepickfeedbackpy)
+  - [エージェント親和性アーキテクチャ (Agent-Native CLI Interface)](#エージェント親和性アーキテクチャ-agent-native-cli-interface)
+  - [セキュア認証情報プロバイダ (Secure Credential Management)](#セキュア認証情報プロバイダ-secure-credential-management)
+  - [エージェント準備状況テスト (Agent Readiness Test)](#エージェント準備状況テスト-agent-readiness-test)
+  - [ConfigResolver & 実行時コンフィグ・フィードバック (icepick/config.py)](#configresolver--実行時コンフィグフィードバック-icepickconfigpy)
+  - [LLM 接続診断エンジン (ConnectionTester / icepick config test)](#llm-接続診断エンジン-connectiontester--icepick-config-test)
+- [シーケンス図（対話型リファクタリングフロー）](#シーケンス図対話型リファクタリングフロー)
+- [エラーハンドリング](#エラーハンドリング)
+
+## 機能一覧
+
+| 機能カテゴリ | 機能ID | 機能名 | 概要 | 対応要件ID |
+|:------------|:-------|:------|:-----|:----------|
+| 構文解析・静的診断 | F-A1 | Snowflake SQL構文解析 | sqlglotを用いたSnowflake方言AST構築と構文エラーハンドリング | A-1 |
+| 構文解析・静的診断 | F-A2 | プルーニング阻害述語診断 | WHERE句の関数ラップによるフルスキャン要因（SNOW-001）検出 | A-2 |
+| 構文解析・静的診断 | F-A3 | 相関副クエリ診断 | 外側スコープ参照を含む相関副クエリ（SNOW-002, LLM連携要）検出 | A-3 |
+| 構文解析・静的診断 | F-A4 | 不要ソート診断 | サブクエリ/CTE内の無意味なORDER BY（SNOW-003）検出 | A-4 |
+| 構文解析・静的診断 | F-A5 | ネストサブクエリ診断 | FROM/JOIN句に直接ネストしたDerived Table（SNOW-007）検出 | A-5 |
+| 構文解析・静的診断 | F-A6 | UNION最適化診断 | 重複排除不要なUNIONからUNION ALLへの置換候補（SNOW-006）検出 | A-6 |
+| 構文解析・静的診断 | F-A7 | 暗黙クロス結合診断 | カンマ区切りFROMによる直積リスク（SNOW-004）検出 | A-7 |
+| 構文解析・静的診断 | F-A8 | 重複テーブルスキャン診断 | 複数CTE間での同一テーブル反復スキャン（SNOW-005）検出 | A-8 |
+| AST置換・最適化 | F-B1 | 決定論的ノード置換 | AST In-place置換による健全ノード維持と局所手術 | B-1 |
+| AST置換・最適化 | F-B2 | Derived Table平坦化 | ネストサブクエリのトップレベルCTE外出し・平坦化 | B-2 |
+| AST置換・最適化 | F-B3 | 局所スライスリライト | ContextSlicerとLLMClientによる局所リライト適用 | B-3 |
+| AST置換・最適化 | F-B4 | UNION ALL置換 | UNIONからUNION ALLへの決定論的ルール置換 | B-4 |
+| AST置換・最適化 | F-B5 | 明示的JOIN置換 | 暗黙クロス結合からINNER JOIN等への決定論的置換 | B-5 |
+| パイプライン・差分適用 | F-C1 | 最適化Diff生成 | icepick rewriteによるGit互換Unified Diff出力 | C-1 |
+| パイプライン・差分適用 | F-C2 | パッチ適用 | icepick patchによるファイル更新・パイプライン入力適用 | C-2 |
+| パイプライン・差分適用 | F-C3 | 対話型Hunk適用 | icepick patch --interactiveによる個別承認とシミュレーション | C-3 |
+| パイプライン・差分適用 | F-C4 | LLM Agenticリライト | icepick rewrite --agenticによる高度な最適化と外部連携 | C-4 |
+| パイプライン・差分適用 | F-C5 | 書式保持スプライシング | TextSplicerによるコメント・インデント完全保持最小Diff生成 | C-5 |
+| 等価性検証 | F-D1 | 双方向EXCEPT検証SQL生成 | icepick verifyによる決定論的等価性検証SQL出力（snow CLI委譲） | D-1 |
+| エージェント親和性・運用 | F-E1 | フリクション記録 | icepick feedbackによる課題・バグのローカル追記記録 | E-1 |
+| エージェント親和性・運用 | F-E2 | 構造化JSON出力 | 全コマンドでの機械判読可能な--json出力 | E-2 |
+| エージェント親和性・運用 | F-E3 | 非対話環境ハング防止 | 非TTY環境でのプロンプト待機防止とActionable Advice | E-3 |
+| エージェント親和性・運用 | F-E4 | セキュア認証管理 | WCMネイティブ連携と優先順位解決ピラミッド（ゼロDB認証） | E-4 |
+| エージェント親和性・運用 | F-E5 | Layer 2 イントロスペクション | 全機能・ルール仕様を一括出力するicepick agent-context | E-5 |
+| エージェント親和性・運用 | F-E6 | 破壊的操作防止ガード | --dry-runおよび非対話環境での--force必須化 | E-6 |
+| エージェント親和性・運用 | F-E7 | カスケード設定解決 | CLI > 環境変数 > 設定ファイル > デフォルト値のカスケード統合 | E-7 |
+| エージェント親和性・運用 | F-E8 | 実行時コンフィグ表示 | 有効な設定項目と解決元ソースを明示するバナー・show出力 | E-8 |
+| エージェント親和性・運用 | F-E9 | 機密情報漏洩防止 | 設定ファイルからの秘密情報除外と表示時マスク | E-9 |
+| エージェント親和性・運用 | F-E10 | LLM接続診断 | icepick config testによるLLMバックエンドの疎通・認証検証 | E-10 |
+| プラガブルプロバイダ | F-F1 | プロバイダ分離・設定汎化 | BaseLLMProvider基盤と辞書形式optionsによる拡張基盤 | F-1 |
+| プラガブルプロバイダ | F-F2 | Vertex AI堅牢化・明示案内 | role: "user"準拠、マルチパート集約、--provider案内 | F-2 |
+
+## アーキテクチャ
 
 本システムは、CLI経由でSnowflake SQLを受け取り、AST解析・診断・局所置換・差分提示・等価性検証のパイプラインを実行する。
 
@@ -42,7 +97,7 @@ flowchart TD
     VerifySQL -.->|pipe / execution| SnowCLI["snow CLI / CI Pipeline"]
 ```
 
-## 2. データモデル / 型定義
+## データモデル
 
 ```python
 from dataclasses import dataclass
@@ -80,9 +135,9 @@ class OptimizationResult:
     is_verified: Optional[bool] = None# 等価性検証の合否
 ```
 
-## 3. コンポーネント詳細設計
+## 機能詳細
 
-### 3.1 `LinterEngine` (`icepick/linter/`)
+### 4.1 `LinterEngine` (`icepick/linter/`)
 - 対応要件: A-1, A-2, A-3, A-4, A-5, A-6, A-7, A-8
 - `BaseRule` を継承した個別ルールクラスを動的にロードして実行する。
 - 各ルールは `check(ast: exp.Expression) -> List[DiagnosticIssue]` を実装する。
@@ -103,7 +158,7 @@ class OptimizationResult:
   - `ImplicitCrossJoinRule` (`SNOW-004`): `exp.From` 内のカンマ区切り複数テーブル参照を検出し、明示的な `CROSS JOIN` ノードを `suggested_replacement` にセット。
   - `DuplicateTableScanRule` (`SNOW-005`): 同一クエリ内の複数 CTE 間で同一テーブルの重複スキャンを検出し、共通 CTE 集約の警告を発行。
 
-### 3.2 `ASTPatcher` & `SubqueryToCTE` (`icepick/patcher/`)
+### 4.2 `ASTPatcher` & `SubqueryToCTE` (`icepick/patcher/`)
 - 対応要件: B-1, B-2, B-4, B-5
 - **In-place置換**:
   - `issue.suggested_replacement` が存在する場合: `issue.target_node.replace(issue.suggested_replacement)`（`SNOW-001`, `SNOW-006`, `SNOW-004`）
@@ -115,7 +170,7 @@ class OptimizationResult:
   4. トップレベルの `ast.args["with_"]`（存在しない場合は `ast.set("with_", exp.With(expressions=[...]))`）に追加。
   5. 元のサブクエリノードを `exp.Table(this=cte_alias, alias=original_alias)` で置換。
 
-### 3.3 `ContextSlicer`, `LLMClient` & プラガブルプロバイダ基盤 (`icepick/llm/`)
+### 4.3 `ContextSlicer`, `LLMClient` & プラガブルプロバイダ基盤 (`icepick/llm/`)
 - 対応要件: B-3, C-1, C-4, F-1, F-2
 - **IPO 記述**:
   - **Input**:
@@ -220,7 +275,7 @@ class OptimizationResult:
     - 未知のプロバイダが渡された場合は、利用可能なプロバイダ一覧（`gemini`, `vertex`）を提示する Actionable な `ValueError` を送出。
     - `register_provider(name, cls)` により、将来の新規プロバイダ（OpenAI, Claude, ローカルLLM等）をプラグイン的に追加可能。
 
-### 3.4 `DiffFormatter` & `TextSplicer` (`icepick/diff/`, `icepick/patcher/`)
+### 4.4 `DiffFormatter` & `TextSplicer` (`icepick/diff/`, `icepick/patcher/`)
 - 対応要件: C-1, C-2, C-3, C-5
 - **元ソース書式保持型局所置換 (`TextSplicer`)**:
   - **IPO 記述**:
@@ -241,7 +296,7 @@ class OptimizationResult:
 - **全体再フォーマットフォールバック (`--reformat`)**:
   - インラインサブクエリの CTE 平坦化（`--flatten-subqueries`）など、クエリ全体の構文木組み換えを伴う操作や明示的な再フォーマット指示時は、AST 全体シリアライズによる Diff 生成（`normalize=True`）を許可。
 
-### 3.5 `EquivalenceVerifier` / 検証 SQL 生成器 (`icepick/verifier/`)
+### 4.5 `EquivalenceVerifier` / 検証 SQL 生成器 (`icepick/verifier/`)
 - 対応要件: D-1
 - **設計思想 (ADR-0004 準拠)**:
   - 最適化前後のクエリが等価であるかを判定するための双方向 `EXCEPT` クエリを決定論的に生成する単一責任に特化。
@@ -294,7 +349,7 @@ class OptimizationResult:
     - `icepick verify orig.sql opt.sql --count-only`: 件数集約クエリを出力。
     - パイプ連携例: `icepick verify orig.sql opt.sql | snow sql -f -`
 
-### 3.6 `FeedbackRecorder` (`icepick/feedback.py` または `cli.py`)
+### 4.6 `FeedbackRecorder` (`icepick/feedback.py` または `cli.py`)
 - 対応要件: E-1
 - テスト中・運用中にエージェントや開発者が直面した摩擦（フリクション）、バグ、改善アイデアをローカルログファイルにアペンド記録。
 - データ構造:
@@ -311,7 +366,7 @@ class OptimizationResult:
 - 保存形式: `.icepick_feedback.jsonl`（JSON Lines形式、1行1レコード、UTF-8追記）。
 - `--category` のバリデーションを行い、不正値の場合は有効なenum一覧（`friction`, `bug`, `doc`, `idea`）を提示する Actionable Error を送出。
 
-### 3.7 エージェント親和性アーキテクチャ (Agent-Native CLI Interface)
+### 4.7 エージェント親和性アーキテクチャ (Agent-Native CLI Interface)
 - 対応要件: E-2, E-3, E-5, E-6, E-7
 - **機械可読イントロスペクション (`icepick agent-context`)**:
   - Layer 2 イントロスペクションとして、CLI の全コマンド、引数・オプション仕様、対応する最適化ルール一覧（`rule-001`〜`007`等）、環境変数スキーマ（`DEBUG_ICEPICK_*`）を単一の構造化 JSON として出力。
@@ -330,7 +385,7 @@ class OptimizationResult:
 - **自己修正エラー (Actionable & Enumerated Errors)**:
   - 引数やオプションのバリデーションエラー時、可能な値の列挙（enumリスト）と、コピペして実行可能な修正コマンド例を出力。
 
-### 3.8 セキュア認証情報プロバイダ (Secure Credential Management)
+### 4.8 セキュア認証情報プロバイダ (Secure Credential Management)
 - 対応要件: E-4
 - **厳格な優先順位ピラミッド (The Strict Priority Pyramid)**:
   1. 一時デバッグ/CI用環境変数（`DEBUG_ICEPICK_` プレフィックス必須。例: `DEBUG_ICEPICK_GEMINI_API_KEY`）
@@ -358,14 +413,14 @@ class OptimizationResult:
         $env:DEBUG_ICEPICK_GEMINI_API_KEY="<your_key>"
       ```
 
-### 3.9 エージェント準備状況テスト (Agent Readiness Test)
+### 4.9 エージェント準備状況テスト (Agent Readiness Test)
 - 対応要件: E-8
 - **テスト設計 (`tests/test_agent_readiness.py`)**:
   1. **非TTYハング防止テスト**: `stdin` を `io.StringIO` やパイプ模倣オブジェクトに差し替え、プロンプト待ちでブロックせずに終了することを確認。
   2. **構造化出力テスト**: 全サブコマンド（`check`, `rewrite`, `patch`, `feedback`, `agent-context`, `verify`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
   3. **Actionable Error検証**: 認証未設定時および不正引数指定時に、有効な enum 一覧および復旧コマンド例が出力に含まれていることを検証。
 
-### 3.10 `ConfigResolver` & 実行時コンフィグ・フィードバック (`icepick/config.py` または `cli.py`)
+### 4.10 `ConfigResolver` & 実行時コンフィグ・フィードバック (`icepick/config.py` または `cli.py`)
 - 対応要件: E-9, C-4, E-4
 - **優先順位ピラミッド (Configuration Precedence)**:
   1. **CLI オプション**: `--provider` (`-p`), `--model` (`-m`), `--timeout` (`-t`), `--dialect` (`-d`) 等
@@ -390,7 +445,7 @@ class OptimizationResult:
 - **確認コマンド (`icepick config show`)**:
   - 現在解決されている全設定項目（LLM設定、Dialect設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。機密項目は `display_value` でマスクされる。
 
-### 3.11 LLM 接続診断エンジン (`ConnectionTester` / `icepick config test`)
+### 4.11 LLM 接続診断エンジン (`ConnectionTester` / `icepick config test`)
 - 対応要件: E-10, F-2
 - **設計思想**:
   - 最適化（`rewrite`）を実行する前に、LLM バックエンド（Gemini / Vertex AI）の設定が正常かつ通信可能であるかを事前検証し、初期導入時のトラブルシューティングコストを最小化する。
@@ -423,7 +478,7 @@ class OptimizationResult:
   - `icepick config test --model gemini-2.5-flash`: モデルを明示指定してテスト
   - `icepick config test --json`: 構造化 JSON 出力
 
-## 4. シーケンス図（対話型リファクタリングフロー）
+## シーケンス図（対話型リファクタリングフロー）
 
 ```mermaid
 sequenceDiagram
@@ -483,4 +538,31 @@ sequenceDiagram
         Snowflake-->>Agent: 差分行フィードバック (再試行プロンプトへ)
     end
 ```
+
+## 6. エラーハンドリング
+
+本システムは、人間だけでなく自律型 AI エージェントがパイプライン内で安定稼働できるよう、決定論的な終了コード体系と Fail-Safe 設計、自己修正可能な Actionable Advice を徹底する。
+
+### 6.1 終了コード体系 (Exit Codes)
+| 終了コード | 分類 | 発生条件・対象コマンド | エージェント推奨アクション |
+|:---:|:---|:---|:---|
+| **0** | 正常終了 (Success) | ・`check`: 課題 0 件（クリーン）<br>・`rewrite`: Diff 生成成功<br>・`patch`: パッチ適用成功<br>・`verify`: 検証 SQL 出力成功<br>・`config test`: LLM 接続検証成功 | 次のパイプラインステップへ進行。 |
+| **1** | 課題検出 / 検証不一致 / 設定・認証エラー | ・`check`: 1 件以上の DiagnosticIssue 検出<br>・`config test`: LLM 認証・通信失敗<br>・`rewrite --agentic`: LLM 認証キー未設定<br>・不正な CLI オプション / カテゴリ引数 | stderr の Actionable Advice に従い設定・認証を修復、または `rewrite` を実行。 |
+| **2** | 致命的構文パースエラー / ファイル入出力エラー | ・入力 SQL の Snowflake 構文パース失敗 (`ParseError`)<br>・対象ファイル不存在 / 読み込み・書き込み権限不足 | SQL の構文修正、またはファイルパスの存在確認。 |
+
+### 6.2 Fail-Safe 設計 & 自動フォールバック
+1. **AST 破壊の完全防止**:
+   - LLM が生成した SQL スニペットは、構文木への結合前に必ず `sqlglot.parse_one(snippet, dialect=dialect)` で事前検証される。
+   - パース失敗や構文エラーが発生した場合は該当箇所の置換を中断し、元の AST ノードを 100% 維持してフェイルセーフに処理を継続する。
+2. **TextSplicer の安全フォールバック**:
+   - コメントやインデントを保持するソーススプライシングにおいて、行・列オフセットの一致が曖昧な場合は、安全にクエリ全体の再フォーマット出力（`ast.to_sql()`）へとフォールバックする。
+
+### 6.3 Actionable Advice UX (自己修復ループ)
+- エラー発生時は単なるスタックトレースを出力せず、問題の根本原因と**即座に実行可能な修正コマンド**を Rich パネルまたは黄色文字（stderr）で提示する：
+  - Gemini API キー未設定時: `cmdkey /generic:icepick:gemini_api_key ...` および `--provider vertex` への切り替え案内を出力。
+  - Vertex AI 認証未設定時: `gcloud auth application-default login` および `gcp_project` 設定案内を出力。
+  - 不正引数時: サポートされている選択肢の一覧（例: `['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']`）を出力。
+
+### 6.4 非対話環境（CI / Agent）でのハングアップ防止
+- `patch --interactive` 等のプロンプト入力が必要な機能は、非 TTY 環境（パイプ入力やエージェント実行環境）で呼び出された場合、永久に入力待ちハングアップすることなく、`--force` フラグの指定を促すエラーを出力して直ちに終了コード 1 でフェイルする。
 

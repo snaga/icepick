@@ -35,14 +35,15 @@ Snowflake上で稼働する長大かつ複雑なバッチクエリ（数百〜�
    - `icepick patch`: 標準入力（`icepick rewrite query.sql | icepick patch query.sql`）またはパッチファイルから安全に変更を適用（唯一のファイル変更コマンド）。
    - `git add -p` と同様の対話型Hunk個別承認・適用（`--interactive`）およびシミュレーション（`--dry-run`）をサポート。
 
-6. **決定論的等価性自動検証 (Equivalence Verification)**:
-   - Snowflake実環境またはテスト環境において、元クエリと新クエリの `EXCEPT` 差分ゼロ検証、または `HASH_AGG` 突合を実行し、セマンティクスの一致を自動証明。
+6. **双方向EXCEPT等価性検証SQL生成 (Equivalence Verification SQL Generator)**:
+   - 最適化前後のクエリが数学的・意味論的に等価であるかを判定するための双方向 `EXCEPT` クエリ（差分行出力または `--count-only` 件数集約）を副作用なく決定論的に生成。
+   - `icepick verify orig.sql opt.sql | snow sql -f -` のように公式 `snow CLI` や既存の社内 CI/CD パイプラインへパイプ連携し、安全にセマンティクスの一致を証明。
 
 7. **エージェント親和性とフィードバックループ (Agent-Native DX)**:
    - AIコーディングエージェント（Claude Code, Cursor, Antigravity等）が自律実行できるよう、全コマンドでの機械判読可能な `--json` 構造化出力、非TTY環境での自動ハング防止、自己修正エラー（Actionable Error）を完備。
    - 3層イントロスペクションの Layer 2 として、全機能とルール仕様を一括把握できる `icepick agent-context` コマンドを提供。
    - 破壊的操作の明示的境界として `--dry-run` および非対話環境での `--force` 必須化による上書き事故の根絶。
-   - 汎用環境変数を排除し、デバッグ用環境変数（`DEBUG_ICEPICK_*`）と Windows 資格情報マネージャー（WCM）のみで構成されるセキュア認証基盤。
+   - 汎用環境変数を排除し、デバッグ用環境変数（`DEBUG_ICEPICK_*`）と Windows 資格情報マネージャー（WCM）のみで構成されるセキュア認証基盤（DB認証情報は保持しないゼロ・クレデンシャル設計）。
    - テストや運用中に遭遇した摩擦（フリクション）やバグを即座にローカル記録する `icepick feedback` コマンドを提供。
 
 ## 🚀 ビジネス目標 / ゴール
@@ -53,3 +54,4 @@ Snowflake上で稼働する長大かつ複雑なバッチクエリ（数百〜�
 ## ⚠️ 制約事項 / スコープ外
 - **対象SQL方言**: 初期リリースでは Snowflake SQL に特化（BigQueryやRedshift等の他方言は将来対応）。
 - **DDL変更はスコープ外**: テーブルのクラスタリングキー変更やインデックス作成などのDDL操作は行わず、DML/SELECTクエリのリライトに集中する。
+- **データベース直接実行およびDB認証管理はスコープ外 (ADR-0004)**: Snowflakeへの直接接続やクエリ実行、およびデータベースのパスワード・秘密情報の保持は行わず、公式ツール（`snow CLI`）や外部パイプラインに委譲する（ゼロ・クレデンシャル安全設計）。

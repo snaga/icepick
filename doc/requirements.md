@@ -6,8 +6,8 @@
 
 - 入力されるSQLは、Snowflakeの方言（Dialect）として構文的に有効であること。
 - Python 3.10以上の実行環境および `sqlglot` ライブラリが利用可能であること。
-- LLMによる局所リライト機能を利用する場合、有効なLLM APIキーが環境変数に設定されていること。
-- Snowflake上での等価性検証機能を利用する場合、有効なSnowflake接続認証情報が設定されていること。
+- LLMによる局所リライト機能（--agentic）を利用する場合、Gemini APIキーまたはGoogle Cloud ADC（Vertex AI）の認証情報が利用可能であること。
+- 等価性検証用 SQL（icepick verify）を Snowflake 実環境で実行・突合する場合、外部の公式ツール（snow CLI 等）や適切な実行環境が用意されていること（Icepick 本体は DB 認証情報を一切保持・要求しない）。
 
 ## 制約条件
 
