@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import sqlglot.errors
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -45,6 +46,7 @@ from icepick.patcher import (
     SubqueryToCTE,
     TextSplicer,
 )
+from icepick.prescription import PrescriptionEngine, PrescriptionPlan
 from icepick.verifier.equivalence import generate_verification_sql
 
 app = typer.Typer(
@@ -276,6 +278,175 @@ def check(
 
     console.print(table)
     console.print(f"\n[bold red]Found {len(issues)} issue(s).[/bold red]")
+    raise typer.Exit(code=1)
+
+
+@app.command("diag")
+def diag(
+    file: Path = typer.Argument(
+        ...,
+        help="Path to Snowflake SQL file to diagnose.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    format: str = typer.Option(
+        "text",
+        "--format",
+        "-f",
+        help="Output format: 'text' (human-readable cards) or 'json' (machine-readable plan).",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Shorthand for --format json.",
+    ),
+    severity: str | None = typer.Option(
+        None,
+        "--severity",
+        "-s",
+        help="Filter prescriptions by severity threshold ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW').",
+    ),
+    dialect: str = typer.Option(
+        "snowflake",
+        "--dialect",
+        "-d",
+        help="SQL dialect (default: snowflake).",
+    ),
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to configuration file.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+) -> None:
+
+    """Diagnose Snowflake SQL and generate actionable optimization prescriptions."""
+    valid_dialect = _validate_dialect(dialect)
+
+    norm_format = format.strip().lower()
+    if norm_format not in ("text", "json"):
+        err_console.print(
+            f"[bold red]Error:[/bold red] Invalid format '{format}'. Supported formats are: 'text', 'json'."
+        )
+        raise typer.Exit(code=1)
+
+    min_rank: int | None = None
+    if severity is not None:
+        norm_sev = severity.strip().upper()
+        if norm_sev not in VALID_SEVERITIES:
+            valid_list = ", ".join(VALID_SEVERITIES)
+            err_console.print(
+                f"[bold red]Error:[/bold red] Invalid severity '{severity}'. "
+                f"Supported severity thresholds are: {valid_list}."
+            )
+            err_console.print(
+                f"[yellow]Actionable Advice:[/yellow] Specify one of the valid severity thresholds: {valid_list}."
+            )
+            raise typer.Exit(code=1)
+        min_rank = SEVERITY_ORDER[norm_sev]
+
+    try:
+        sql_text = file.read_text(encoding="utf-8")
+    except Exception as exc:
+        err_console.print(f"[bold red]Error reading file {file}:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    try:
+        cfg, _ = _load_config(config, cli_args={"dialect": valid_dialect})
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    linter_engine = _create_engine(cfg)
+    engine = PrescriptionEngine(linter_engine=linter_engine, dialect=valid_dialect)
+
+    try:
+        plan: PrescriptionPlan = engine.diagnose(sql_text, file_path=str(file))
+    except (ParseError, sqlglot.errors.ParseError) as exc:
+        err_console.print(f"[bold red]Parse Error:[/bold red] {exc}")
+        line_info = getattr(exc, "line", None)
+        col_info = getattr(exc, "col", None)
+        if line_info is not None:
+            err_console.print(f"[yellow]Location: Line {line_info}, Column {col_info}[/yellow]")
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:
+        err_console.print(f"[bold red]Error during diagnosis:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if min_rank is not None:
+        plan.prescriptions = [
+            rx for rx in plan.prescriptions if _get_severity_rank(rx.severity) >= min_rank
+        ]
+        plan.issues_count = len(plan.prescriptions)
+
+    is_json = json_output or norm_format == "json"
+
+    if is_json:
+        typer.echo(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
+        if plan.issues_count == 0:
+            raise typer.Exit(code=0)
+        raise typer.Exit(code=1)
+
+    if plan.issues_count == 0:
+        console.print(f"[green]✓ No optimization issues found in {file}. Clean query![/green]")
+        raise typer.Exit(code=0)
+
+    console.print(
+        f"[bold cyan]Prescription Plan:[/bold cyan] {plan.issues_count} optimization prescriptions found in {file}\n"
+    )
+
+    for rx in plan.prescriptions:
+        severity_val = (
+            rx.severity.value if isinstance(rx.severity, Severity) else str(rx.severity)
+        )
+        if severity_val in {"CRITICAL", "HIGH"}:
+            severity_color = "bold red"
+        elif severity_val == "MEDIUM":
+            severity_color = "yellow"
+        else:
+            severity_color = "cyan"
+
+        panel_title = (
+            f"[bold yellow]{rx.id}[/bold yellow] "
+            f"[{severity_color}]{severity_val}[/{severity_color}] - "
+            f"Rule: [bold]{rx.rule_id}[/bold] "
+            f"(Action: [magenta]{rx.action.value}[/magenta])"
+        )
+
+        cte_label = rx.target.cte or "(top-level query)"
+        node_label = rx.target.node_type
+        if rx.target.line_range:
+            start_l, end_l = rx.target.line_range
+            line_label = f"L{start_l}" if start_l == end_l else f"L{start_l}-L{end_l}"
+        else:
+            line_label = "N/A"
+
+        body_lines = [
+            f"[bold]CTE:[/bold] {cte_label}",
+            f"[bold]Node:[/bold] {node_label}",
+            f"[bold]Line:[/bold] {line_label}",
+            f"[bold]Original SQL:[/bold] [red]{escape(rx.original_sql)}[/red]",
+        ]
+
+        if rx.action.value == "DELETE":
+            body_lines.append("[bold]Suggested SQL:[/bold] [dim](Remove node)[/dim]")
+        elif rx.suggested_sql:
+            body_lines.append(f"[bold]Suggested SQL:[/bold] [green]{escape(rx.suggested_sql)}[/green]")
+        else:
+            body_lines.append("[bold]Suggested SQL:[/bold] [dim](Manual rewrite recommended)[/dim]")
+
+        body_lines.append(f"[bold]Rationale:[/bold] {escape(rx.rationale)}")
+        body_lines.append(f"[bold]Expected Impact:[/bold] [italic]{escape(rx.expected_impact)}[/italic]")
+
+        content = "\n".join(body_lines)
+        console.print(Panel(content, title=panel_title, border_style="cyan"))
+
     raise typer.Exit(code=1)
 
 
