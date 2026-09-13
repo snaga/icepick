@@ -115,7 +115,7 @@ class OptimizationResult:
   5. 元のサブクエリノードを `exp.Table(this=cte_alias, alias=original_alias)` で置換。
 
 ### 3.3 `ContextSlicer`, `LLMClient` & プラガブルプロバイダ基盤 (`icepick/llm/`)
-- 対応要件: B-3, C-1, C-4, F-1
+- 対応要件: B-3, C-1, C-4, F-1, F-2
 - **IPO 記述**:
   - **Input**:
     - `target_node`: 置換対象の AST ノード（相関サブクエリ、複雑な結合、共通スキャンノード等）
@@ -204,6 +204,13 @@ class OptimizationResult:
     - エンドポイント:
       - `location == "global"`: `https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google/models/{model}:generateContent`
       - その他リージョン: `https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
+    - リクエスト構造 (Smart Search 準拠):
+      - `contents`: `[{"role": "user", "parts": [{"text": prompt}]}]`（Vertex AI REST 仕様に則り `role: "user"` を明示設定してスキーマエラーを防止）
+    - レスポンス解析:
+      - `candidates[0].content.parts` 内のすべてのパーツを走査し、`text` フィールドを連結抽出（思考モデルの thought パートと回答テキストパートの分離・集約に対応）
+  - **エージェント向け明示的プロバイダ案内 (Actionable Provider Guidance)**:
+    - 暗黙の自動判別・サイレントフォールバックは採用せず、挙動の決定論性とコンテキスト明快性を維持。
+    - プロバイダがデフォルト（`gemini`）で認証情報が不足している場合、Vertex AI 利用希望者への具体的な切り替え手順（`--provider vertex`、環境変数 `ICEPICK_LLM_PROVIDER=vertex`、`.icepick.toml` の `llm_provider = "vertex"`）を Actionable Advice として明示提示。
   - **汎化設定辞書 (`provider_options: dict[str, Any]`)**:
     - プロバイダ固有の設定（APIキー、GCPプロジェクト、リージョン、将来のパラメータ等）は、すべて `dict[str, Any]` として汎化され、プロバイダファクトリおよび各プロバイダ初期化子に透過的に渡される。
     - `LLMClient(..., provider_options={"project": "my-p", "location": "asia-northeast1"})` 形式を標準化しつつ、既存のキーワード引数（`api_key`, `project`, `location`）も自動マージして完全な後方互換性を担保。
@@ -371,7 +378,7 @@ class OptimizationResult:
   - 現在解決されている全設定項目（LLM設定、Snowflake設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。機密項目は `display_value` でマスクされる。
 
 ### 3.11 接続診断エンジン (`ConnectionTester` / `icepick config test`)
-- 対応要件: E-10
+- 対応要件: E-10, F-2
 - **設計思想**:
   - 最適化（`rewrite`）や検証（`verify`）を実行する前に、設定が正常かつ通信可能であるかを事前検証し、初期導入時のトラブルシューティングコストを最小化する。
 - **データ構造**:
@@ -387,12 +394,12 @@ class OptimizationResult:
     - `all_passed: bool`: 実行された全チェックが成功したか否か
     - `to_dict() -> dict[str, Any]`: 機械可読シリアライズ辞書
 - **IPO 記述**:
-  - **Input**: `Config` インスタンス、テスト対象セレクタ（`all`, `llm`, `snowflake`）、タイムアウト秒数
+  - **Input**: `Config` インスタンス、テスト対象セレクタ（`all`, `llm`, `snowflake`）、タイムアウト秒数、プロバイダ上書き（`provider`）、モデル上書き（`model`）
   - **Processing**:
     1. **LLM 接続診断 (`test_llm`)**:
-       - アクティブなプロバイダ（Gemini または Vertex AI）に応じて認証トークン/APIキーを解決。
+       - アクティブなプロバイダ（Gemini または Vertex AI、CLI 引数による上書き可）に応じて認証トークン/APIキーを解決。
        - 最小限の Ping リクエストを送信し、HTTP 200 かつ有効なレスポンスが返るか検証。所要時間を計測。
-       - 認証欠損時や通信エラー時は `actionable_advice`（`gcloud auth application-default login` や `cmdkey /generic:icepick:gemini_api_key ...`）を付与。
+       - 認証欠損時や通信エラー時は `actionable_advice`（`gcloud auth application-default login` や `cmdkey /generic:icepick:gemini_api_key ...`、および Vertex AI 指定方法案内）を付与。
     2. **Snowflake 接続診断 (`test_snowflake`)**:
        - `snowflake_account`, `snowflake_database`, `snowflake_schema`, `snowflake_warehouse` および WCM ペア `icepick:snowflake` から認証情報を解決。
        - 不足パラメータがある場合は接続前に即座に FAIL とし、WCM ペア登録コマンドを付与。
@@ -408,6 +415,8 @@ class OptimizationResult:
   - `icepick config test --llm`: LLM のみ診断
   - `icepick config test --snowflake`: Snowflake のみ診断
   - `icepick config test --target [all|llm|snowflake]`: ターゲット名指定（相互互換）
+  - `icepick config test --provider vertex`: プロバイダを明示指定してテスト（設定ファイル不要）
+  - `icepick config test --model gemini-2.5-flash`: モデルを明示指定してテスト
   - `icepick config test --json`: 構造化 JSON 出力
 
 ## 4. シーケンス図（対話型リファクタリングフロー）
