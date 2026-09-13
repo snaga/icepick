@@ -213,6 +213,33 @@ class TestGeminiProvider:
         with pytest.raises(ValueError, match="candidate content contains no parts"):
             provider_no_parts.generate_text("hi")
 
+    def test_gemini_provider_multipart_response_parsing(self) -> None:
+        """Test aggregating multiple text parts in candidate content for Gemini."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": "SELECT * "},
+                                    {"text": "FROM table_a;"},
+                                ]
+                            }
+                        }
+                    ]
+                },
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        provider = GeminiProvider(
+            model="gemini-2.5-flash",
+            options={"api_key": "k"},
+            http_client=client,
+        )
+        assert provider.generate_text("q") == "SELECT * FROM table_a;"
+
 
 class TestVertexAIProvider:
     """Tests for VertexAIProvider REST integration, token resolution, and health checks."""
@@ -342,6 +369,139 @@ class TestVertexAIProvider:
             mock_run.return_value = MagicMock(returncode=0, stdout="gcloud-cli-token\n")
             token = provider._get_token()
             assert token == "gcloud-cli-token"
+
+    def test_vertex_provider_payload_has_user_role(self) -> None:
+        """Test that the request payload explicitly specifies role: 'user' for Vertex AI."""
+        captured_requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_requests.append(request)
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "candidates": [
+                        {"content": {"parts": [{"text": "SELECT 1"}]}}
+                    ]
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(transport=transport)
+
+        provider = VertexAIProvider(
+            model="gemini-2.5-flash",
+            options={"project": "proj-schema", "location": "us-central1"},
+            http_client=client,
+        )
+
+        with patch.object(provider, "_get_token", return_value="mock-token"):
+            provider.generate_text("SELECT 1")
+
+        assert len(captured_requests) == 1
+        payload = json.loads(captured_requests[0].content)
+        assert "contents" in payload
+        assert len(payload["contents"]) == 1
+        content = payload["contents"][0]
+        assert content.get("role") == "user"
+        assert content.get("parts") == [{"text": "SELECT 1"}]
+
+    def test_vertex_provider_multipart_response_parsing(self) -> None:
+        """Test aggregating multiple text parts in candidate content into a single string."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "candidates": [
+                        {
+                            "content": {
+                                "role": "model",
+                                "parts": [
+                                    {"text": "SELECT 1 "},
+                                    {"text": "FROM dual;"},
+                                ],
+                            }
+                        }
+                    ]
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(transport=transport)
+
+        provider = VertexAIProvider(
+            model="gemini-2.5-flash",
+            options={"project": "proj-multi", "location": "us-central1"},
+            http_client=client,
+        )
+
+        with patch.object(provider, "_get_token", return_value="mock-token"):
+            text = provider.generate_text("query")
+            assert text == "SELECT 1 FROM dual;"
+
+    def test_vertex_provider_thought_and_text_parts(self) -> None:
+        """Test extraction across thought and text blocks, and error on empty response."""
+        # 1. Thought block + code block extraction
+        def handler_thought(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"thought": True, "text": "Analyzing query... "},
+                                    {"text": "SELECT * FROM t"},
+                                ]
+                            }
+                        }
+                    ]
+                },
+            )
+
+        client_thought = httpx.Client(transport=httpx.MockTransport(handler_thought))
+        provider_thought = VertexAIProvider(
+            model="gemini-2.5-flash",
+            options={"project": "proj-thought"},
+            http_client=client_thought,
+        )
+
+        with patch.object(provider_thought, "_get_token", return_value="mock-token"):
+            result = provider_thought.generate_text("query")
+            assert result == "Analyzing query... SELECT * FROM t"
+
+        # 2. Empty text response raises ValueError
+        def handler_empty(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"thought": True},
+                                    {"text": "   "},
+                                ]
+                            }
+                        }
+                    ]
+                },
+            )
+
+        client_empty = httpx.Client(transport=httpx.MockTransport(handler_empty))
+        provider_empty = VertexAIProvider(
+            model="gemini-2.5-flash",
+            options={"project": "proj-empty"},
+            http_client=client_empty,
+        )
+
+        with (
+            patch.object(provider_empty, "_get_token", return_value="mock-token"),
+            pytest.raises(
+                ValueError,
+                match="Vertex AI returned an empty response or unexpected content format.",
+            ),
+        ):
+            provider_empty.generate_text("query")
 
 
 class TestProviderRegistry:

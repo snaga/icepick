@@ -236,8 +236,14 @@ class VertexAIProvider(BaseLLMProvider):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+        # Explicitly specify role: "user" in contents for Vertex AI REST API schema compliance.
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ],
         }
 
         client, should_close = self._get_client()
@@ -261,7 +267,15 @@ class VertexAIProvider(BaseLLMProvider):
             msg = f"LLM candidate content contains no parts. Candidate: {candidate}"
             raise ValueError(msg)
 
-        text = parts[0].get("text", "")
+        # Aggregate all text blocks from parts to support thinking models and multi-part responses.
+        text = "".join(
+            part.get("text", "")
+            for part in parts
+            if isinstance(part, dict) and "text" in part
+        )
+        if not text.strip():
+            raise ValueError("Vertex AI returned an empty response or unexpected content format.")
+
         return str(text)
 
     def health_check(self) -> dict[str, Any]:

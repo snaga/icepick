@@ -120,7 +120,15 @@ class GeminiProvider(BaseLLMProvider):
             msg = f"LLM candidate content contains no parts. Candidate: {candidate}"
             raise ValueError(msg)
 
-        text = parts[0].get("text", "")
+        # Aggregate all text blocks from parts to support thinking models and multi-part responses.
+        text = "".join(
+            part.get("text", "")
+            for part in parts
+            if isinstance(part, dict) and "text" in part
+        )
+        if not text.strip():
+            raise ValueError("Gemini returned an empty response or unexpected content format.")
+
         return str(text)
 
     def health_check(self) -> dict[str, Any]:

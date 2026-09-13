@@ -131,7 +131,9 @@ class TestLLMClient:
             assert req.headers["Authorization"] == "Bearer mock-bearer-token-12345"
 
             body = json.loads(req.content.decode("utf-8"))
-            assert body == {"contents": [{"parts": [{"text": slice_ctx.prompt}]}]}
+            assert body == {
+                "contents": [{"role": "user", "parts": [{"text": slice_ctx.prompt}]}]
+            }
             assert "generationConfig" not in body
             assert "temperature" not in str(body)
 
