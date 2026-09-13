@@ -41,6 +41,7 @@ class TestAgentContextUnit:
         expected_commands = {
             "check",
             "diag",
+            "diff",
             "rewrite",
             "patch",
             "verify",
@@ -74,6 +75,17 @@ class TestAgentContextUnit:
         assert diag_opts["--severity"]["flag"] == "-s"
         assert diag_opts["--severity"]["choices"] == ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
         assert "--config" in diag_opts
+
+        # Check arguments and options for 'diff'
+        assert "file" in commands["diff"]["arguments"]
+        assert commands["diff"]["arguments"]["file"]["required"] is True
+        diff_opts = commands["diff"]["options"]
+        assert "--rx" in diff_opts
+        assert diff_opts["--rx"]["type"] == "str"
+        assert "--output" in diff_opts
+        assert diff_opts["--output"]["flag"] == "-o"
+        assert "--dialect" in diff_opts
+        assert "--config" in diff_opts
 
         # Check options for 'rewrite'
         rewrite_opts = commands["rewrite"]["options"]
@@ -135,6 +147,7 @@ class TestAgentContextUnit:
         expected_dialects = ["snowflake", "postgres", "duckdb", "bigquery"]
         assert commands["check"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["diag"]["options"]["--dialect"]["choices"] == expected_dialects
+        assert commands["diff"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["rewrite"]["options"]["--dialect"]["choices"] == expected_dialects
         assert commands["verify"]["options"]["--dialect"]["choices"] == expected_dialects
 

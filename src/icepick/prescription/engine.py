@@ -267,7 +267,11 @@ class PrescriptionEngine:
                         parsed_rep = sqlglot.parse_one(rx.suggested_sql, dialect=self.dialect)
                         if isinstance(parsed_rep, exp.Expression):
                             suggested_rep = parsed_rep
-                    except (sqlglot.errors.ParseError, sqlglot.errors.SqlglotError, ValueError) as err:
+                    except (
+                        sqlglot.errors.ParseError,
+                        sqlglot.errors.SqlglotError,
+                        ValueError,
+                    ) as err:
                         logger.debug(
                             "Failed to parse fallback suggested_sql '%s': %s", rx.suggested_sql, err
                         )

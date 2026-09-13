@@ -45,7 +45,10 @@ class TestPrescriptionDiffEngine:
         assert "+    SELECT id, name FROM raw_data" in diff
         # Non-sargable replaced with range condition
         assert "-WHERE DATE(created_at) = '2023-01-01';" in diff
-        assert "+WHERE created_at >= '2023-01-01' AND created_at < DATEADD(DAY, 1, '2023-01-01');" in diff
+        assert (
+            "+WHERE created_at >= '2023-01-01' AND created_at < DATEADD(DAY, 1, '2023-01-01');"
+            in diff
+        )
 
     def test_generate_diff_selected_rx_id(
         self, engine: PrescriptionEngine, multi_issue_sql: str
@@ -72,9 +75,7 @@ class TestPrescriptionDiffEngine:
         )
         assert " WHERE DATE(created_at) = '2023-01-01';" in diff_rx2
 
-    def test_generate_diff_multiple_selected_rx_ids(
-        self, engine: PrescriptionEngine
-    ) -> None:
+    def test_generate_diff_multiple_selected_rx_ids(self, engine: PrescriptionEngine) -> None:
         """Verify selecting a subset of prescriptions synthesizes diffs only for specified IDs."""
         sql = (
             "SELECT id, val FROM t1\n"
@@ -122,9 +123,7 @@ class TestPrescriptionDiffEngine:
         assert "RX-888" in err_msg
         assert "RX-999" in err_msg
 
-    def test_generate_diff_clean_query_returns_empty(
-        self, engine: PrescriptionEngine
-    ) -> None:
+    def test_generate_diff_clean_query_returns_empty(self, engine: PrescriptionEngine) -> None:
         """Verify clean SQL query produces an empty diff string."""
         clean_sql = "SELECT id, name FROM users WHERE id = 1;"
         diff = engine.generate_diff(clean_sql)
@@ -160,7 +159,9 @@ class TestPrescriptionDiffEngine:
         for rx in deserialized_plan.prescriptions:
             assert rx._issue is None
 
-        diff = engine.generate_diff(multi_issue_sql, plan=deserialized_plan, selected_ids=["RX-001"])
+        diff = engine.generate_diff(
+            multi_issue_sql, plan=deserialized_plan, selected_ids=["RX-001"]
+        )
         assert diff != ""
         assert "created_at >= '2023-01-01'" in diff
 

@@ -208,7 +208,34 @@ icepick diag models/batch_mart.sql --json
 
 ---
 
-### 3. クエリの最適化（Unified Diff 出力）(`rewrite`)
+### 3. 処方箋ID選択型差分生成 (`diff`)
+`diag` で提示された処方箋（Prescription）から必要なものだけを選択（`--rx`）し、元の書式・コメントを完全に維持したまま最小限の Unified Diff を生成します（ADR-0005 処方箋ファーストアーキテクチャ）。
+
+#### 全処方箋を反映した差分をターミナルで確認する
+```bash
+icepick diff models/batch_mart.sql
+```
+
+#### 特定の処方箋のみを選択して局所差分を生成する (`--rx`)
+指定した処方箋 ID（カンマ区切りで複数指定可能）のみを適用し、他の行や構文は 1 文字も改変しません。
+```bash
+# RX-001 のみを局所適用
+icepick diff models/batch_mart.sql --rx RX-001
+
+# RX-001 と RX-003 を同時に適用
+icepick diff models/batch_mart.sql --rx RX-001,RX-003
+```
+*(※ 存在しない処方箋 ID を指定した場合は、利用可能な ID 一覧付きのエラーが表示され終了コード `1` を返します)*
+
+#### 生成した差分をパッチファイルとして保存する (`--output` / `-o`)
+```bash
+icepick diff models/batch_mart.sql --rx RX-001 -o patches/rx001.patch
+```
+生成されたパッチは、そのまま `icepick patch` で元ファイルへ安全に適用できます。
+
+---
+
+### 4. クエリの最適化（Unified Diff 出力）(`rewrite`)
 元ファイルを一切改変せず、AST に基づく最適化の差分（Unified Diff）を標準出力またはファイルに出力します。
 
 #### ターミナルで差分を確認する (Read-Only)
@@ -277,7 +304,7 @@ icepick rewrite models/batch_mart.sql --agentic -p vertex -m gemini-1.5-pro
 
 ---
 
-### 4. パッチの適用 (`patch`)
+### 5. パッチの適用 (`patch`)
 Unified Diff を指定の SQL ファイルに外科手術的に適用します。
 
 #### パッチファイルから適用する
@@ -305,7 +332,7 @@ icepick patch models/batch_mart.sql patches/batch_mart.patch --dry-run
 
 ---
 
-### 5. セマンティクス等価性検証 SQL の生成 (`verify`)
+### 6. セマンティクス等価性検証 SQL の生成 (`verify`)
 元クエリと最適化クエリが同一の結果セットを返すことを証明するための双方向 `EXCEPT` 検証クエリを決定論的・数学的に生成します（ADR-0004: クレデンシャル不要・純粋 SQL 生成モデル）。
 
 Icepick 自体は Snowflake への直接接続を行わないため、**データベース認証情報・パスワードは一切不要**です。生成された SQL は、開発者が使い慣れた Snowflake CLI (`snow sql`) や `snowsql` にパイプまたはファイル渡しで安全に実行できます。
@@ -344,7 +371,7 @@ SELECT
 
 ---
 
-### 6. エージェント親和性とフィードバックループ (`Agent-Native DX`)
+### 7. エージェント親和性とフィードバックループ (`Agent-Native DX`)
 
 Icepick は、人間だけでなく AI コーディングエージェント（Claude Code, Cursor, Antigravity 等）が自律的かつ安全に利用できるよう設計されています。
 

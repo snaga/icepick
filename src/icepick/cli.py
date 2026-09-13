@@ -451,6 +451,100 @@ def diag(
     raise typer.Exit(code=1)
 
 
+@app.command("diff")
+def diff(
+    file: Path = typer.Argument(
+        ...,
+        help="Path to Snowflake SQL file to diff.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    rx: str | None = typer.Option(
+        None,
+        "--rx",
+        help="Comma-separated prescription IDs to apply (e.g. 'RX-001,RX-003'). If omitted, all prescriptions are applied.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Save the generated unified diff to a .patch file instead of stdout.",
+    ),
+    dialect: str = typer.Option(
+        "snowflake",
+        "--dialect",
+        "-d",
+        help="SQL dialect (default: snowflake).",
+    ),
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to configuration file (.json or .toml).",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+) -> None:
+    """Generate minimal source-preserving Unified Diff for specified prescriptions."""
+    valid_dialect = _validate_dialect(dialect)
+
+    try:
+        sql_text = file.read_text(encoding="utf-8")
+    except Exception as exc:
+        err_console.print(f"[bold red]Error reading file {file}:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    try:
+        cfg, _ = _load_config(config, cli_args={"dialect": valid_dialect})
+    except (ValueError, FileNotFoundError) as exc:
+        err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    selected_ids = [s.strip() for s in rx.split(",") if s.strip()] if rx else None
+
+    linter_engine = _create_engine(cfg)
+    engine = PrescriptionEngine(linter_engine=linter_engine, dialect=valid_dialect)
+
+    try:
+        diff_text = engine.generate_diff(sql_text, selected_ids=selected_ids, filename=file.name)
+    except ValueError as exc:
+        err_console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except (ParseError, sqlglot.errors.ParseError) as exc:
+        err_console.print(f"[bold red]Parse Error:[/bold red] {exc}")
+        line_info = getattr(exc, "line", None)
+        col_info = getattr(exc, "col", None)
+        if line_info is not None:
+            err_console.print(f"[yellow]Location: Line {line_info}, Column {col_info}[/yellow]")
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:
+        err_console.print(f"[bold red]Error during diff generation:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if not diff_text:
+        console.print(
+            "[dim]No diff generated. The query is already optimal or selected prescriptions produced no changes.[/dim]"
+        )
+        raise typer.Exit(code=0)
+
+    if output is not None:
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(diff_text, encoding="utf-8")
+        except Exception as exc:
+            err_console.print(f"[bold red]Error writing output file {output}:[/bold red] {exc}")
+            raise typer.Exit(code=2) from exc
+        console.print(f"[green]Unified diff saved to {output}[/green]", soft_wrap=True)
+        raise typer.Exit(code=0)
+
+    render_diff(diff_text, console=console)
+    raise typer.Exit(code=0)
+
+
 @app.command("rewrite")
 def rewrite(
     file: Path = typer.Argument(
