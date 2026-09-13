@@ -2,8 +2,7 @@
 
 > [!IMPORTANT]
 > **仕様書と作業領域の分離ルール**:
-> - **公開仕様マスター (`doc/`)**: 要件・設計・憲法・ADRなど、リポジトリ公開に必要な正式仕様書のみを配置します。
-> - **非公開作業領域 (`doc_internal/`)**: 実装タスク計画（`doc_internal/tasks.md`）や開発用作業メモは、`.gitignore` で完全除外した非公開ディレクトリ `doc_internal/` で運用し、この公開用 `doc/structure.md` には掲載しません。
+> - **公開仕様マスター (`doc/`)**: 要件・設計・憲法・ADRなど、リポジトリ公開に必要な正式仕様書のみを配置します。プライベートな開発タスク計画や作業メモはリポジトリ公開ドキュメントから除外して管理します。
 
 ## 📁 フォルダ構成
 
@@ -146,7 +145,6 @@ Snowflake_Query_Optimizer_PoC/
 ## 🛡️ Git除外方針 (.gitignore)
 プロジェクトの健全性とセキュリティのため、以下のカテゴリを `.gitignore` で確実に除外します。
 - **AIエージェント設定・プライベート設定**: `AGENTS.md`, `GEMINI.md`, `/.agent/`, `/.gemini/`, `/.claude/`
-- **非公開開発作業領域**: `/doc_internal/`
 - **秘密情報・環境変数**: `.env`, `credentials.json`, `token.json`
 - **ビルド・パッケージ成果物**: `dist/`, `build/`, `*.egg-info/`
 - **Python キャッシュ・仮想環境**: `__pycache__/`, `*.py[cod]`, `.venv/`
