@@ -67,6 +67,8 @@ class TestAgentContextUnit:
         assert "--agentic" in rewrite_opts
         assert rewrite_opts["--agentic"]["type"] == "bool"
         assert "--flatten-subqueries" in rewrite_opts
+        assert "--reformat" in rewrite_opts
+        assert rewrite_opts["--reformat"]["type"] == "bool"
         assert "--json" in rewrite_opts
         assert "--provider" in rewrite_opts
         assert rewrite_opts["--provider"]["choices"] == ["gemini", "vertex"]

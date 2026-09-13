@@ -37,9 +37,12 @@ from icepick.linter.rules import (
 )
 from icepick.llm.client import LLMClient
 from icepick.parser import parse_snowflake_sql
-from icepick.patcher.agentic import AgenticPatcher
-from icepick.patcher.in_place import ASTPatcher
-from icepick.patcher.subquery_to_cte import SubqueryToCTE
+from icepick.patcher import (
+    AgenticPatcher,
+    ASTPatcher,
+    SubqueryToCTE,
+    TextSplicer,
+)
 from icepick.security.credentials import format_actionable_error, resolve_credential
 from icepick.verifier.equivalence import EquivalenceVerifier
 
@@ -322,6 +325,11 @@ def rewrite(
         "--flatten-subqueries",
         help="Flatten inline derived tables to top-level CTEs.",
     ),
+    reformat: bool = typer.Option(
+        False,
+        "--reformat",
+        help="Reformat entire SQL query AST (pretty=True) instead of source-preserving minimal splicing.",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -507,8 +515,46 @@ def rewrite(
         converter = SubqueryToCTE(dialect=dialect)
         ast, _ = converter.flatten_all_subqueries(ast)
 
-    optimized_sql = ast.sql(dialect=dialect, pretty=True)
-    diff_text = format_diff(original_sql, optimized_sql, filename=file.name, dialect=dialect)
+    # Generate unified diff:
+    # By default, use source-preserving TextSplicer for deterministic local fixes
+    # to maintain comments, indentation, and formatting without AST reformatting noise.
+    # Fall back to full AST reformatting (normalize=True) if --reformat is specified,
+    # if --flatten-subqueries was requested (structural transformation),
+    # if complex LLM rewrites were applied (AST-based modifications),
+    # or if TextSplicer couldn't locate target spans.
+    has_agentic_applied = any(i.requires_llm for i in applied_issues)
+    if not reformat and not flatten_subqueries and not has_agentic_applied:
+        splicer = TextSplicer(dialect=dialect)
+        spliced_sql, spliced_issues = splicer.splice_all(original_sql, auto_fixable_issues)
+        if spliced_issues:
+            diff_text = format_diff(
+                original_sql,
+                spliced_sql,
+                filename=file.name,
+                normalize=False,
+                dialect=dialect,
+            )
+            applied_issues = [
+                i for i in applied_issues if i not in auto_fixable_issues
+            ] + spliced_issues
+        else:
+            optimized_sql = ast.sql(dialect=dialect, pretty=True)
+            diff_text = format_diff(
+                original_sql,
+                optimized_sql,
+                filename=file.name,
+                normalize=True,
+                dialect=dialect,
+            )
+    else:
+        optimized_sql = ast.sql(dialect=dialect, pretty=True)
+        diff_text = format_diff(
+            original_sql,
+            optimized_sql,
+            filename=file.name,
+            normalize=True,
+            dialect=dialect,
+        )
 
     if not diff_text.strip():
         if json_output:

@@ -102,6 +102,11 @@ def get_agent_context() -> dict[str, Any]:
                         "default": False,
                         "description": "Flatten inline derived tables to top-level CTEs.",
                     },
+                    "--reformat": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Reformat entire SQL query AST (pretty=True) instead of source-preserving minimal splicing.",
+                    },
                     "--json": {
                         "type": "bool",
                         "default": False,

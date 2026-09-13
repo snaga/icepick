@@ -276,7 +276,7 @@ class TestCli:
     def test_rewrite_output_patch_file(self, tmp_path: Path) -> None:
         """Test that rewrite -o creates a patch file with valid unified diff."""
         sql_file = tmp_path / "test.sql"
-        original_sql = "SELECT 1 UNION SELECT 2"
+        original_sql = "SELECT 1\nUNION\nSELECT 2"
         sql_file.write_text(original_sql, encoding="utf-8")
         patch_file = tmp_path / "test.patch"
 
@@ -378,6 +378,111 @@ class TestCli:
         applied_rule_ids = [issue["rule_id"] for issue in data["issues"]]
         assert "SNOW-001" in applied_rule_ids
         assert "SNOW-006" not in applied_rule_ids
+
+    def test_rewrite_source_preserving_diff(self, tmp_path: Path) -> None:
+        """Test that rewrite preserves 4-space indent, lowercase casing, and comments."""
+        sql_file = tmp_path / "query.sql"
+        original_sql = (
+            "-- Important reporting query\n"
+            "select\n"
+            "    id,\n"
+            "    user_name,\n"
+            "    created_at\n"
+            "from\n"
+            "    events\n"
+            "where\n"
+            "    date(created_at) = '2024-01-01'\n"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        result = runner.invoke(app, ["rewrite", str(sql_file)])
+        assert result.exit_code == 0
+        output = result.output
+
+        # Context lines should preserve lowercase, 4 spaces indent, and comments
+        assert "-    date(created_at) = '2024-01-01'" in output
+        assert (
+            "+    created_at >= '2024-01-01' AND created_at < DATEADD(DAY, 1, '2024-01-01')"
+            in output
+        )
+        # Should NOT reformat untouched lines into uppercase or 2-space indents
+        assert "-select" not in output
+        assert "-    id," not in output
+        assert "-    user_name," not in output
+        assert "-from" not in output
+        assert "-    events" not in output
+        assert "-where" not in output
+        # Verify original file untouched (read-only guarantee)
+        assert sql_file.read_text(encoding="utf-8") == original_sql
+
+    def test_rewrite_and_patch_roundtrip_with_raw_formatting(self, tmp_path: Path) -> None:
+        """Test clean roundtrip rewrite -> patch pipeline preserving custom formatting."""
+        sql_file = tmp_path / "report.sql"
+        original_sql = (
+            "-- Important reporting query\n"
+            "select\n"
+            "    id,\n"
+            "    user_name,\n"
+            "    created_at\n"
+            "from\n"
+            "    events\n"
+            "where\n"
+            "    date(created_at) = '2024-01-01'\n"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+        patch_file = tmp_path / "report.patch"
+
+        # 1. Generate patch with rewrite
+        rewrite_res = runner.invoke(app, ["rewrite", str(sql_file), "-o", str(patch_file)])
+        assert rewrite_res.exit_code == 0
+        assert patch_file.exists()
+
+        # 2. Apply patch with icepick patch (simulating interactive environment)
+        with patch.object(_NamedTextIOWrapper, "isatty", return_value=True):
+            patch_res = runner.invoke(app, ["patch", str(sql_file), str(patch_file)])
+        assert patch_res.exit_code == 0
+        assert "Successfully applied" in patch_res.output
+
+        # 3. Verify file content preserves original comment, casing, and 4-space indent
+        patched_sql = sql_file.read_text(encoding="utf-8")
+        assert "-- Important reporting query" in patched_sql
+        assert "select\n    id,\n    user_name,\n    created_at" in patched_sql
+        assert "from\n    events\nwhere" in patched_sql
+        assert (
+            "    created_at >= '2024-01-01' AND created_at < DATEADD(DAY, 1, '2024-01-01')"
+            in patched_sql
+        )
+        assert "date(created_at)" not in patched_sql
+
+    def test_rewrite_reformat_flag(self, tmp_path: Path) -> None:
+        """Test that --reformat triggers full AST reformatting diff (normalize=True)."""
+        sql_file = tmp_path / "query.sql"
+        original_sql = (
+            "-- Important reporting query\n"
+            "select\n"
+            "    id,\n"
+            "    user_name,\n"
+            "    created_at\n"
+            "from\n"
+            "    events\n"
+            "where\n"
+            "    date(created_at) = '2024-01-01'\n"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        result = runner.invoke(app, ["rewrite", str(sql_file), "--reformat"])
+        assert result.exit_code == 0
+        output = result.output
+
+        # When --reformat is specified, normalize=True AST formatting kicks in
+        # sqlglot canonical output normalizes to uppercase and 2 spaces indent
+        assert "-  TO_DATE(created_at) = '2024-01-01'" in output
+        assert (
+            "+  created_at >= '2024-01-01' AND created_at < DATEADD(DAY, 1, '2024-01-01')"
+            in output
+        )
+        assert "FROM events" in output
+        assert "WHERE" in output
 
     def test_rewrite_parse_error_exits_2(self, tmp_path: Path) -> None:
         """Test that rewrite on invalid SQL syntax exits with 2."""
