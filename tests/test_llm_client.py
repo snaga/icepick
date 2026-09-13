@@ -161,19 +161,144 @@ class TestLLMClient:
             assert text == "SELECT 1"
             mock_creds.refresh.assert_called_once()
 
-    def test_vertex_token_missing_raises_value_error(self) -> None:
-        """Test error when credentials token cannot be acquired."""
+    def test_vertex_endpoint_url_regional(self) -> None:
+        """Test that regional location results in {location}-aiplatform.googleapis.com endpoint."""
+        llm = LLMClient(provider="vertex", project="my-project", location="us-central1")
+        with patch.object(llm, "_get_vertex_token", return_value="mock-token"):
+            url, headers, _ = llm._build_request_params("prompt")
+            assert (
+                url
+                == "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-3.8-flash:generateContent"
+            )
+            assert headers["Authorization"] == "Bearer mock-token"
+
+    def test_vertex_endpoint_url_global(self) -> None:
+        """Test that global location results in aiplatform.googleapis.com endpoint without prefix."""
+        llm = LLMClient(provider="vertex", project="my-project", location="global")
+        with patch.object(llm, "_get_vertex_token", return_value="mock-token"):
+            url, headers, _ = llm._build_request_params("prompt")
+            assert (
+                url
+                == "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
+            )
+            assert headers["Authorization"] == "Bearer mock-token"
+
+    def test_vertex_token_google_auth_success(self) -> None:
+        """Test that google.auth.default returns the token directly without invoking gcloud."""
         mock_creds = MagicMock()
         mock_creds.valid = True
-        mock_creds.token = None
+        mock_creds.token = "google-auth-token-999"
 
-        with patch("google.auth.default", return_value=(mock_creds, "project")):
-            llm = LLMClient(
-                provider="vertex",
-                project="project",
-            )
-            with pytest.raises(ValueError, match="Failed to obtain OAuth2 token"):
-                llm.generate_text("test")
+        with (
+            patch("google.auth.default", return_value=(mock_creds, "project")),
+            patch("subprocess.run") as mock_subproc,
+        ):
+            llm = LLMClient(provider="vertex", project="project")
+            token = llm._get_vertex_token()
+            assert token == "google-auth-token-999"
+            mock_subproc.assert_not_called()
+
+    def test_vertex_token_gcloud_fallback_success(self) -> None:
+        """Test fallback to gcloud subprocess when google.auth.default raises an error."""
+        from google.auth.exceptions import DefaultCredentialsError
+
+        mock_subproc_result = MagicMock()
+        mock_subproc_result.returncode = 0
+        mock_subproc_result.stdout = "gcloud-token-12345\n"
+
+        with (
+            patch(
+                "google.auth.default",
+                side_effect=DefaultCredentialsError("Not found"),  # type: ignore[no-untyped-call]
+            ),
+            patch("subprocess.run", return_value=mock_subproc_result) as mock_subproc,
+        ):
+            llm = LLMClient(provider="vertex", project="project")
+            token = llm._get_vertex_token()
+            assert token == "gcloud-token-12345"
+            mock_subproc.assert_called_once()
+            called_args = mock_subproc.call_args[0][0]
+            assert "auth" in called_args
+            assert "application-default" in called_args
+
+    def test_vertex_token_gcloud_second_command_fallback(self) -> None:
+        """Test that gcloud fallback tries 'auth print-access-token' if 'application-default' fails."""
+        from google.auth.exceptions import DefaultCredentialsError
+
+        fail_res = MagicMock(returncode=1, stderr="Not logged in to application-default")
+        success_res = MagicMock(returncode=0, stdout="gcloud-auth-token-abc\n")
+
+        with (
+            patch(
+                "google.auth.default",
+                side_effect=DefaultCredentialsError("Not found"),  # type: ignore[no-untyped-call]
+            ),
+            patch("subprocess.run", side_effect=[fail_res, success_res]) as mock_subproc,
+        ):
+            llm = LLMClient(provider="vertex", project="project")
+            token = llm._get_vertex_token()
+            assert token == "gcloud-auth-token-abc"
+            assert mock_subproc.call_count == 2
+
+    def test_vertex_token_all_failed_raises_actionable_error(self) -> None:
+        """Test that failure across both google-auth and gcloud CLI raises actionable ValueError."""
+        from google.auth.exceptions import DefaultCredentialsError
+
+        mock_subproc_fail = MagicMock(returncode=1, stderr="Not logged in")
+
+        with (
+            patch(
+                "google.auth.default",
+                side_effect=DefaultCredentialsError("Not found"),  # type: ignore[no-untyped-call]
+            ),
+            patch("subprocess.run", return_value=mock_subproc_fail),
+        ):
+            llm = LLMClient(provider="vertex", project="project")
+            with pytest.raises(
+                ValueError,
+                match=r"Failed to acquire Google Cloud ADC token for Vertex AI\. Please run 'gcloud auth application-default login'",
+            ):
+                llm._get_vertex_token()
+
+    def test_vertex_token_gcloud_cli_not_found(self) -> None:
+        """Test that FileNotFoundError when running gcloud returns None safely."""
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            llm = LLMClient(provider="vertex", project="project")
+            assert llm._get_vertex_token_from_gcloud() is None
+
+    def test_vertex_token_gcloud_timeout(self) -> None:
+        """Test that TimeoutExpired when running gcloud is handled gracefully."""
+        import subprocess
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="gcloud", timeout=10)):
+            llm = LLMClient(provider="vertex", project="project")
+            assert llm._get_vertex_token_from_gcloud() is None
+
+    def test_get_vertex_token_from_gcloud_platform_cmd(self) -> None:
+        """Test platform-specific gcloud command resolution."""
+        # Windows
+        with (
+            patch("sys.platform", "win32"),
+            patch("shutil.which", return_value=r"C:\tools\gcloud.cmd"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="token-win\n")
+            llm = LLMClient(provider="vertex", project="project")
+            tok = llm._get_vertex_token_from_gcloud()
+            assert tok == "token-win"
+            assert mock_run.call_args[0][0][0] == r"C:\tools\gcloud.cmd"
+
+        # POSIX
+        with (
+            patch("sys.platform", "linux"),
+            patch("shutil.which", return_value="/usr/bin/gcloud"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="token-nix\n")
+            llm = LLMClient(provider="vertex", project="project")
+            tok = llm._get_vertex_token_from_gcloud()
+            assert tok == "token-nix"
+            assert mock_run.call_args[0][0][0] == "/usr/bin/gcloud"
 
     def test_sql_extraction_formats(self) -> None:
         """Test extracting SQL from various code-fence markdown formats and raw text."""

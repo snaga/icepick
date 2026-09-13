@@ -9,6 +9,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
+import subprocess
+import sys
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -157,20 +160,92 @@ class LLMClient:
         msg = f"Unsupported LLM provider: '{provider}'. Must be 'gemini' or 'vertex'."
         raise ValueError(msg)
 
-    def _get_vertex_token(self) -> str:
-        """Acquire an OAuth2 Bearer token using google-auth credentials."""
-        import google.auth
+    def _get_vertex_token_from_gcloud(self) -> str | None:
+        """Acquire an ADC token using gcloud CLI subprocess as a fallback.
 
-        credentials, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        if not credentials.valid:
-            credentials.refresh(_HttpxAuthRequest(self._http_client))  # type: ignore[no-untyped-call]
-        token = getattr(credentials, "token", None)
+        In corporate environments using service account impersonation or SSO,
+        google.auth.default() might fail to find or refresh credentials directly.
+        Running the gcloud CLI invokes the native authentication helper.
+
+        Returns:
+            str | None: The access token string if successful, or None otherwise.
+        """
+        if sys.platform == "win32":
+            cmd = shutil.which("gcloud.cmd") or shutil.which("gcloud") or "gcloud.cmd"
+        else:
+            cmd = shutil.which("gcloud") or "gcloud"
+
+        commands = [
+            [cmd, "auth", "application-default", "print-access-token"],
+            [cmd, "auth", "print-access-token"],
+        ]
+
+        for cmd_args in commands:
+            try:
+                result = subprocess.run(
+                    cmd_args,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    token = result.stdout.strip()
+                    if token:
+                        return token
+                logger.debug(
+                    "Command %s failed with code %d: %s",
+                    " ".join(cmd_args),
+                    result.returncode,
+                    result.stderr.strip(),
+                )
+            except FileNotFoundError:
+                logger.debug("gcloud command not found: %s", cmd)
+                return None
+            except subprocess.TimeoutExpired:
+                logger.warning("gcloud token command timed out: %s", " ".join(cmd_args))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed to acquire token via gcloud (%s): %s", " ".join(cmd_args), exc)
+
+        return None
+
+    def _get_vertex_token(self) -> str:
+        """Acquire an OAuth2 Bearer token using google-auth credentials or gcloud CLI fallback.
+
+        Returns:
+            str: Valid OAuth2 access token.
+
+        Raises:
+            ValueError: If token acquisition fails via both google-auth and gcloud CLI fallback.
+        """
+        token: str | None = None
+
+        try:
+            import google.auth
+
+            credentials, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            if not credentials.valid:
+                credentials.refresh(_HttpxAuthRequest(self._http_client))  # type: ignore[no-untyped-call]
+            raw_token = getattr(credentials, "token", None)
+            if raw_token:
+                token = str(raw_token)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("google.auth.default token acquisition failed: %s", exc)
+
         if not token:
-            msg = "Failed to obtain OAuth2 token from Google Cloud credentials"
+            logger.info("Attempting fallback to gcloud CLI for ADC token acquisition.")
+            token = self._get_vertex_token_from_gcloud()
+
+        if not token:
+            msg = (
+                "Failed to acquire Google Cloud ADC token for Vertex AI. "
+                "Please run 'gcloud auth application-default login' in your terminal."
+            )
             raise ValueError(msg)
-        return str(token)
+
+        return token
 
     def _build_request_params(self, prompt: str) -> tuple[str, dict[str, str], dict[str, Any]]:
         """Construct the URL, headers, and JSON body for the REST request."""
@@ -199,8 +274,13 @@ class LLMClient:
                 "set gcp_project in Config, or set GOOGLE_CLOUD_PROJECT env var."
             )
             raise ValueError(msg)
+        host = (
+            "aiplatform.googleapis.com"
+            if self.location == "global"
+            else f"{self.location}-aiplatform.googleapis.com"
+        )
         url = (
-            f"https://{self.location}-aiplatform.googleapis.com/v1/projects/{self.project}"
+            f"https://{host}/v1/projects/{self.project}"
             f"/locations/{self.location}/publishers/google/models/{self.model}:generateContent"
         )
         token = self._get_vertex_token()
