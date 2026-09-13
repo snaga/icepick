@@ -296,11 +296,11 @@ API キーやパスワードなどの機密情報を安全に保護し、シェ�
 
 > [!IMPORTANT]
 > **環境汚染防止のための設計方針**:
-> 他のツールや親プロセスからの偶発的なトークン混入・情報漏洩を防ぐため、**一般的な環境変数（`GEMINI_API_KEY` や `SNOWFLAKE_PASSWORD` 等）は意図的に探索対象から除外** されています。
+> 他のツールや親プロセスからの偶発的なトークン混入・情報漏洩を防ぐため、**一般的な環境変数（`GEMINI_API_KEY` や `SNOWFLAKE_PASSWORD`、`SNOWFLAKE_USER` 等）は意図的に探索対象から除外** されています。
 
 ### 認証解決の優先順位 (Priority Pyramid)
 1. **一時デバッグ / CI・CD 専用環境変数** (`DEBUG_ICEPICK_<KEY>`)
-2. **Windows 資格情報マネージャー** (`icepick:<key>`)
+2. **Windows 資格情報マネージャー** (`icepick:<key>` / `icepick:snowflake`)
 3. **自己修正エラー (Actionable Error)**
 
 ---
@@ -314,11 +314,14 @@ $cred = Get-Credential -UserName "any" -Message "Gemini API Key をパスワー�
 cmdkey /generic:icepick:gemini_api_key /user:any /pass:$($cred.GetNetworkCredential().Password)
 ```
 
-#### 2. Snowflake パスワードの登録 (verify コマンド用)
+#### 2. Snowflake 認証情報（ユーザ名・パスワードペア）の登録 (verify コマンド用)
+Icepick では、Snowflake のユーザー名とパスワードをペアで安全に管理する **`icepick:snowflake`** を採用しています。
 ```powershell
-$cred = Get-Credential -UserName "any" -Message "Snowflake パスワードを入力してください"
-cmdkey /generic:icepick:snowflake_password /user:any /pass:$($cred.GetNetworkCredential().Password)
+# Recommended (safe, masked input without leaving credentials in shell history):
+$cred = Get-Credential -Message "Enter Snowflake Credentials"
+cmdkey /generic:icepick:snowflake /user:$($cred.UserName) /pass:$($cred.GetNetworkCredential().Password)
 ```
+*(※ ダイアログの「ユーザー名」に Snowflake ユーザー名、「パスワード」に Snowflake パスワードを入力します)*
 
 ---
 
@@ -327,8 +330,8 @@ cmdkey /generic:icepick:snowflake_password /user:any /pass:$($cred.GetNetworkCre
 # Gemini API キー
 cmdkey /generic:icepick:gemini_api_key /user:any /pass:<your_gemini_api_key>
 
-# Snowflake パスワード
-cmdkey /generic:icepick:snowflake_password /user:any /pass:<your_snowflake_password>
+# Snowflake 認証情報（ユーザ名・パスワードペア）
+cmdkey /generic:icepick:snowflake /user:<snowflake_user> /pass:<snowflake_password>
 ```
 *(※ `cmdkey` 特有の UTF-16LE / Null byte トラップは Icepick 内部で自動検知・安全にデコードされます)*
 
@@ -341,7 +344,7 @@ cmdkey /list:icepick:*
 
 # 削除
 cmdkey /delete:icepick:gemini_api_key
-cmdkey /delete:icepick:snowflake_password
+cmdkey /delete:icepick:snowflake
 ```
 
 ---
@@ -352,13 +355,15 @@ CI 環境やローカルでの一時実行に限り、`DEBUG_ICEPICK_` プレフ
 ```powershell
 # PowerShell
 $env:DEBUG_ICEPICK_GEMINI_API_KEY = "your_key"
-$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD = "your_password"
+$env:DEBUG_ICEPICK_SNOWFLAKE_USER = "<snowflake_user>"
+$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD = "<snowflake_password>"
 ```
 
 ```bash
 # Bash / CI
 export DEBUG_ICEPICK_GEMINI_API_KEY="your_key"
-export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="your_password"
+export DEBUG_ICEPICK_SNOWFLAKE_USER="<snowflake_user>"
+export DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="<snowflake_password>"
 ```
 
 ---
@@ -388,7 +393,7 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
 1. **CLI オプション (`cli`)**: コマンドライン実行時に直接渡された引数（最優先）。
 2. **環境変数 (`env`)**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GCP_PROJECT`, `GOOGLE_CLOUD_PROJECT` 等の環境変数。
 3. **設定ファイル (`file`)**: `--config` で指定されたファイル、またはカレントディレクトリの `.icepick.toml` / `icepick.json`。
-4. **セキュア認証情報 (`keyring`)**: Windows 資格情報マネージャー (WCM) に暗号化保存されたクレデンシャル（`icepick:*`）。
+4. **セキュア認証情報 (`keyring`)**: Windows 資格情報マネージャー (WCM) に暗号化保存されたクレデンシャル（`icepick:gemini_api_key`, `icepick:snowflake`）。API キーだけでなく、Snowflake 認証ペア（`snowflake_user`, `snowflake_password`）も機密情報として安全に解決されます。
 5. **組み込みデフォルト値 (`default`)**: コードベースに組み込まれた安全なフォールバックデフォルト。
 
 ---
@@ -412,7 +417,7 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
 ```
 
 #### 2. 機械可読な `--json` 出力 (`runtime_config`)
-`rewrite --json` 出力には、生成差分データに加えて `runtime_config` オブジェクトが含まれ、解決された値とソースレイヤーがすべて記録されます（API キーなどの機密情報は自動マスキング）。
+`rewrite --json` 出力には、生成差分データに加えて `runtime_config` オブジェクトが含まれ、解決された値とソースレイヤーがすべて記録されます（API キーやパスワード、Snowflake ユーザー名などの機密情報は自動マスキング）。
 
 ```json
 {
@@ -424,13 +429,14 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
     "llm_model": { "value": "gemini-1.5-pro", "source": "cli" },
     "gcp_project": { "value": "my-company-gcp-project", "source": "env" },
     "gcp_location": { "value": "global", "source": "file" },
-    "gemini_api_key": { "value": "***", "source": "keyring" }
+    "gemini_api_key": { "value": "***", "source": "keyring" },
+    "snowflake_user": { "value": "***", "source": "keyring" }
   }
 }
 ```
 
 #### 3. 設定インスペクション (`icepick config show`)
-現在のアクティブな設定一覧、解決元ソース、マスク済みシークレットをいつでも確認できます。
+現在のアクティブな設定一覧、解決元ソース、マスク済みシークレットをいつでも確認できます。`snowflake_user` も機密情報（`SECRET_KEYS`）として管理されているため、パスワードや API キーと同様に安全にマスク表示されます。
 
 ```bash
 icepick config show
@@ -447,6 +453,7 @@ icepick config show
 │ gcp_project         │ my-gcp-proj         │ env          │
 │ gcp_location        │ global              │ file         │
 │ gemini_api_key      │ ***                 │ keyring      │
+│ snowflake_user      │ ***                 │ keyring      │
 │ snowflake_password  │ ***                 │ keyring      │
 └─────────────────────┴─────────────────────┴──────────────┘
 ```
@@ -495,12 +502,17 @@ icepick rewrite models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 
 ### 📄 設定ファイル (`icepick.json` / `.icepick.toml`) の作り方
 
-プロジェクト直下に `icepick.json` または `.icepick.toml` を配置することで、チーム全体で共通のルールや動作オプションをコード管理できます。
+プロジェクト直下に `icepick.json` または `.icepick.toml` を配置することで、チーム全体で共通のルールや Snowflake 接続構成（インフラ設定）、動作オプションをコード管理できます。
 
 #### 基本サンプル (`icepick.json`)
 ```json
 {
   "dialect": "snowflake",
+  "snowflake_account": "xy12345.ap-northeast-1.aws",
+  "snowflake_database": "ANALYTICS",
+  "snowflake_schema": "PUBLIC",
+  "snowflake_warehouse": "COMPUTE_WH",
+  "snowflake_role": "SYSADMIN",
   "enabled_rules": [],
   "disabled_rules": ["SNOW-007"],
   "interactive": false,
@@ -515,6 +527,13 @@ icepick rewrite models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 }
 ```
 
+> [!IMPORTANT]
+> **Snowflake 接続情報の分離と機密保護ベストプラクティス**:
+> 設定ファイル（`icepick.json`, `.icepick.toml`）には、アカウント名・データベース・スキーマ・ウェアハウス・ロールなどの**インフラ接続情報のみ**を記載してください。
+> ユーザー名やパスワードなどの認証情報は設定ファイルに混在させず、Windows 資格情報マネージャー（WCM: `icepick:snowflake`）で一元管理します。
+> これにより、チーム共有の Git リポジトリに機密情報がコミットされるセキュリティ事故を根本から防止します。
+> （※ 安全のため、仮に設定ファイル内に `snowflake_user` や `snowflake_password` を記述しても、Icepick はそれらを意図的に無視し、WCM または一時デバッグ用環境変数からのみ解決します）
+
 > [!CAUTION]
 > **API キーやパスワードなどの機密情報を設定ファイルに書かないでください！**  
 > `icepick.json` や `.env` に API キーを平文で記述すると、GitHub への誤コミットや情報漏洩の原因になります。  
@@ -524,6 +543,11 @@ icepick rewrite models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 | キー名 | 型 | デフォルト値 | 説明 |
 | :--- | :---: | :---: | :--- |
 | `dialect` | `string` | `"snowflake"` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) |
+| `snowflake_account` | `string \| null` | `null` | Snowflake アカウント識別子（例: `xy12345.ap-northeast-1.aws`） |
+| `snowflake_database` | `string \| null` | `null` | デフォルトの Snowflake データベース名 |
+| `snowflake_schema` | `string \| null` | `null` | デフォルトの Snowflake スキーマ名 |
+| `snowflake_warehouse` | `string \| null` | `null` | クエリ実行に使用する仮想ウェアハウス名 |
+| `snowflake_role` | `string \| null` | `null` | セッションで使用する Snowflake ロール名 |
 | `enabled_rules` | `array[string]` | `[]` | 実行するルールIDのホワイトリスト。空の場合は無効化されていない全ルールを実行。 |
 | `disabled_rules` | `array[string]` | `[]` | スキップするルールIDのブラックリスト（例: `["SNOW-007"]`）。 |
 | `interactive` | `boolean` | `false` | `patch` コマンドで変更箇所（Hunk）ごとに承認プロンプトを出すか。 |
@@ -553,9 +577,15 @@ icepick rewrite models/batch_mart.sql -c icepick.json
 | 設定項目 / 環境変数 | 説明 | 格納先 / デフォルト値 |
 | :--- | :--- | :--- |
 | `icepick:gemini_api_key` | Google AI Studio の API キー | **Windows 資格情報マネージャー** (推奨) |
-| `icepick:snowflake_password` | Snowflake 接続パスワード (verify用) | **Windows 資格情報マネージャー** (推奨) |
+| `icepick:snowflake` | Snowflake 認証情報（ユーザ名とパスワードのペア） | **Windows 資格情報マネージャー** (推奨) |
 | `DEBUG_ICEPICK_GEMINI_API_KEY` | (デバッグ/CI用) Gemini API キー | 環境変数 (未設定) |
+| `DEBUG_ICEPICK_SNOWFLAKE_USER` | (デバッグ/CI用) Snowflake ユーザー名 | 環境変数 (未設定) |
 | `DEBUG_ICEPICK_SNOWFLAKE_PASSWORD` | (デバッグ/CI用) Snowflake パスワード | 環境変数 (未設定) |
+| `SNOWFLAKE_ACCOUNT` | Snowflake アカウント識別子 | 環境変数 (未設定) |
+| `SNOWFLAKE_DATABASE` | Snowflake データベース名 | 環境変数 (未設定) |
+| `SNOWFLAKE_SCHEMA` | Snowflake スキーマ名 | 環境変数 (未設定) |
+| `SNOWFLAKE_WAREHOUSE` | Snowflake ウェアハウス名 | 環境変数 (未設定) |
+| `SNOWFLAKE_ROLE` | Snowflake ロール名 | 環境変数 (未設定) |
 | `ICEPICK_DIALECT` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) | `snowflake` |
 | `ICEPICK_ENABLED_RULES` | 有効化するルールID（カンマ区切り） | すべて有効 |
 | `ICEPICK_DISABLED_RULES` | 無効化するルールID（カンマ区切り） | なし |

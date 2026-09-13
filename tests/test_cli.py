@@ -1133,6 +1133,43 @@ class TestCli:
         assert "cmdkey" in output
         assert "Get-Credential" in output
 
+    def test_verify_cli_missing_credentials_json_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test icepick verify orig.sql opt.sql --json outputs error JSON and exits 1 when credentials missing."""
+        f1 = tmp_path / "orig.sql"
+        f2 = tmp_path / "opt.sql"
+        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
+        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
+
+        for key in [
+            "SNOWFLAKE_ACCOUNT",
+            "SNOWFLAKE_USER",
+            "SNOWFLAKE_PASSWORD",
+            "SNOWFLAKE_DATABASE",
+            "SNOWFLAKE_WAREHOUSE",
+            "DEBUG_ICEPICK_SNOWFLAKE_USER",
+            "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD",
+        ]:
+            monkeypatch.delenv(key, raising=False)
+
+        with patch(
+            "icepick.verifier.equivalence.resolve_credential_pair",
+            side_effect=Exception("Not found"),
+        ):
+            result = runner.invoke(app, ["verify", str(f1), str(f2), "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["original_file"] == str(f1)
+        assert data["optimized_file"] == str(f2)
+        assert data["is_equivalent"] is False
+        assert data["error"] is not None
+        assert "icepick:snowflake" in data["error"]
+        assert "cmdkey" in data["error"]
+        assert "Get-Credential" in data["error"]
+
+
     def test_verify_json_output(self, tmp_path: Path) -> None:
         """Test that verify --json outputs structured JSON and respects equivalence exit code."""
         f1 = tmp_path / "orig.sql"
