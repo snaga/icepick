@@ -82,6 +82,15 @@ class TestAgentContextUnit:
         assert "--config" in show_sub["options"]
         assert "--json" in show_sub["options"]
 
+        assert "test" in config_cmd["subcommands"]
+        test_sub = config_cmd["subcommands"]["test"]
+        assert "--target" in test_sub["options"]
+        assert "--llm" in test_sub["options"]
+        assert "--snowflake" in test_sub["options"]
+        assert "--timeout" in test_sub["options"]
+        assert "--config" in test_sub["options"]
+        assert "--json" in test_sub["options"]
+
         # Check options for 'patch'
         patch_opts = commands["patch"]["options"]
         assert "--interactive" in patch_opts

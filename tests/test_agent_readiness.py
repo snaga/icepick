@@ -12,7 +12,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -21,6 +21,7 @@ from icepick import __version__
 from icepick.cli import VALID_DIALECTS, app
 from icepick.diff import normalize_sql
 from icepick.feedback import VALID_CATEGORIES
+from icepick.health import ConnectionHealthReport, ServiceTestResult
 
 runner = CliRunner()
 
@@ -173,6 +174,29 @@ class TestAgentReadiness:
         assert data_cfg["llm_provider"]["value"] in ("gemini", "vertex")
         assert "source" in data_cfg["llm_provider"]
 
+        # 7. config test --json
+        mock_report = ConnectionHealthReport(
+            results={
+                "llm": ServiceTestResult(
+                    service="llm",
+                    success=True,
+                    duration_ms=10.0,
+                    message="Connected.",
+                )
+            }
+        )
+        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
+            mock_tester = MagicMock()
+            mock_tester.test_all.return_value = mock_report
+            mock_tester_cls.return_value = mock_tester
+
+            res_test = runner.invoke(app, ["config", "test", "--llm", "--json"])
+            assert res_test.exit_code == 0
+            data_test = _assert_valid_json_and_no_ansi(res_test.stdout)
+            assert isinstance(data_test, dict)
+            assert data_test["all_passed"] is True
+            assert "llm" in data_test["results"]
+
     def test_readiness_all_commands_help_succeeds(self) -> None:
         """Verify that all commands and subcommands produce valid help messages and exit 0."""
         commands_to_test = [
@@ -185,6 +209,7 @@ class TestAgentReadiness:
             ["agent-context", "--help"],
             ["config", "--help"],
             ["config", "show", "--help"],
+            ["config", "test", "--help"],
         ]
         for cmd in commands_to_test:
             result = runner.invoke(app, cmd)

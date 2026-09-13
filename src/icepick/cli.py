@@ -1095,7 +1095,9 @@ def test_config(
         )
         latency_str = f"{result.duration_ms:.1f}ms"
         details_items = [
-            f"{k}={v}" for k, v in result.details.items() if v and k != "response_snippet"
+            f"{k}={v}"
+            for k, v in result.details.items()
+            if v is not None and str(v) != "" and k != "response_snippet"
         ]
         details_str = ", ".join(details_items) if details_items else "-"
         table.add_row(service.upper(), status_style, latency_str, details_str)

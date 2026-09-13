@@ -279,7 +279,46 @@ def get_agent_context() -> dict[str, Any]:
                                 "description": "Output active configuration as structured JSON.",
                             },
                         },
-                    }
+                    },
+                    "test": {
+                        "description": "Test connectivity and authentication for LLM (Gemini/Vertex) and Snowflake.",
+                        "arguments": {},
+                        "options": {
+                            "--target": {
+                                "flag": "-t",
+                                "type": "str",
+                                "default": "all",
+                                "choices": ["all", "llm", "snowflake"],
+                                "description": "Target service to test ('all', 'llm', 'snowflake'). Default: 'all'.",
+                            },
+                            "--llm": {
+                                "type": "bool",
+                                "default": False,
+                                "description": "Test LLM connection only.",
+                            },
+                            "--snowflake": {
+                                "type": "bool",
+                                "default": False,
+                                "description": "Test Snowflake connection only.",
+                            },
+                            "--timeout": {
+                                "type": "float",
+                                "default": 10.0,
+                                "description": "Timeout in seconds for each connection check (default: 10.0).",
+                            },
+                            "--config": {
+                                "flag": "-c",
+                                "type": "Path",
+                                "default": None,
+                                "description": "Path to configuration file.",
+                            },
+                            "--json": {
+                                "type": "bool",
+                                "default": False,
+                                "description": "Output health report as structured JSON.",
+                            },
+                        },
+                    },
                 },
             },
         },

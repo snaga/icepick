@@ -465,6 +465,60 @@ icepick config show --json
 
 ---
 
+### 🩺 接続事前診断 (Connection Health Check: `icepick config test`)
+
+最適化（`rewrite --agentic`）や検証（`verify`）を実行する前に、LLM（Gemini / Vertex AI）や Snowflake の設定・認証・ネットワーク疎通が正常かを一発で確認できるヘルスチェックコマンドです。
+
+```bash
+# 1. 一括接続診断（LLM & Snowflake）
+icepick config test
+
+# 2. LLM のみ診断
+icepick config test --llm
+
+# 3. Snowflake のみ診断
+icepick config test --snowflake
+
+# 4. 機械可読な JSON 出力（CI / エージェント連携）
+icepick config test --json
+```
+
+#### 診断結果の Rich Table 表示
+各サービスの接続成否、RTT（レイテンシ）、および接続先詳細が美しい表形式で可視化されます。
+
+```text
+                  Icepick Connection Health Check                 
+┏━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Service   ┃ Status ┃ Latency ┃ Details                        ┃
+┡━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ LLM       │  PASS  │ 120.4ms │ provider=vertex, model=gemini- │
+│           │        │         │ 1.5-pro, project=my-project    │
+│ SNOWFLAKE │  PASS  │ 350.2ms │ account=xy12345.ap-northeast-1 │
+│           │        │         │ .aws, database=ANALYTICS       │
+└───────────┴────────┴─────────┴────────────────────────────────┘
+```
+
+#### 失敗時の Actionable Advice（セルフ修復ガイダンス）
+認証や接続に失敗した場合、単にエラーを表示するだけでなく、解決に必要な具体的な修復コマンド（Windows 資格情報マネージャー `cmdkey` の登録手順や `gcloud` 認証コマンド）を **Actionable Advice パネル** として提示します。
+
+```text
+╭─ Actionable Advice: LLM ─────────────────────────────────────╮
+│ Error: Gemini API key is missing or authentication failed.   │
+│                                                              │
+│ Actionable Advice:                                           │
+│ Register your Gemini API key in Windows Credential Manager:  │
+│   $cred = Get-Credential -UserName "any"                     │
+│   cmdkey /generic:icepick:gemini_api_key /user:any           │
+│     /pass:$($cred.GetNetworkCredential().Password)           │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+> [!TIP]
+> **CI/CD および AI エージェント連携**:
+> `--json` オプションを指定すると、装飾なしの構造化 JSON を `stdout` に出力します。全サービスが PASS した場合は終了コード `0`、いずれかが失敗した場合は `1` を返すため、CI パイプラインでの事前ゲートや AI コーディングエージェントの自律トラブルシューティングに最適です。
+
+---
+
 ### 🏢 会社環境での Vertex AI 接続ガイド (Enterprise Vertex AI Setup)
 
 エンタープライズ企業環境では、個人の API キー発行が制限され、Google Cloud の IAM 権限管理と **サービスアカウント偽装 (Service Account Impersonation)** によるアクセスが義務付けられているケースが多くあります。  
