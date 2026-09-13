@@ -218,11 +218,13 @@ class TestEquivalenceVerifier:
             "SNOWFLAKE_PASSWORD",
             "SNOWFLAKE_DATABASE",
             "SNOWFLAKE_WAREHOUSE",
+            "DEBUG_ICEPICK_SNOWFLAKE_USER",
+            "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD",
         ]:
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setattr(
-            "icepick.verifier.equivalence.resolve_credential",
-            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake_password")),
+            "icepick.verifier.equivalence.resolve_credential_pair",
+            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake")),
         )
 
         verifier = EquivalenceVerifier()
@@ -236,6 +238,7 @@ class TestEquivalenceVerifier:
         assert result.orig_not_in_opt_count == -1
         assert result.opt_not_in_orig_count == -1
         assert "Missing required Snowflake connection parameter" in (result.error_message or "")
+        assert "[Authentication Error] Credential pair for 'snowflake'" in (result.error_message or "")
 
     def test_verify_with_snowflake_missing_password_actionable_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -244,8 +247,8 @@ class TestEquivalenceVerifier:
         for key in ["SNOWFLAKE_PASSWORD", "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD"]:
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setattr(
-            "icepick.verifier.equivalence.resolve_credential",
-            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake_password")),
+            "icepick.verifier.equivalence.resolve_credential_pair",
+            MagicMock(side_effect=AuthenticationError("Not found", key_name="snowflake")),
         )
 
         verifier = EquivalenceVerifier()
@@ -258,7 +261,7 @@ class TestEquivalenceVerifier:
         result = verifier.verify_with_snowflake("SELECT 1", "SELECT 1", config=config)
 
         assert result.is_equivalent is False
-        assert "[Authentication Error] Credential for 'snowflake_password'" in (
+        assert "[Authentication Error] Credential pair for 'snowflake'" in (
             result.error_message or ""
         )
 

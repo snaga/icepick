@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from icepick.config import Config
-from icepick.security.credentials import format_actionable_error, resolve_credential
+from icepick.credentials import format_actionable_pair_error, resolve_credential_pair
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,6 @@ class EquivalenceVerifier:
         cfg = config or Config.from_env()
 
         account = getattr(cfg, "snowflake_account", None) or os.environ.get("SNOWFLAKE_ACCOUNT")
-        user = getattr(cfg, "snowflake_user", None) or os.environ.get("SNOWFLAKE_USER")
         database = getattr(cfg, "snowflake_database", None) or os.environ.get("SNOWFLAKE_DATABASE")
         schema = getattr(cfg, "snowflake_schema", None) or os.environ.get("SNOWFLAKE_SCHEMA")
         warehouse = getattr(cfg, "snowflake_warehouse", None) or os.environ.get(
@@ -199,12 +198,17 @@ class EquivalenceVerifier:
         )
         role = getattr(cfg, "snowflake_role", None) or os.environ.get("SNOWFLAKE_ROLE")
 
+        user = getattr(cfg, "snowflake_user", None)
         password = getattr(cfg, "snowflake_password", None)
-        if not password:
+        if not user or not password:
             try:
-                password, _ = resolve_credential("snowflake_password")
-            except Exception:  # noqa: BLE001
-                password = os.environ.get("SNOWFLAKE_PASSWORD")
+                pair_user, pair_pass, _ = resolve_credential_pair("snowflake")
+                if not user:
+                    user = pair_user
+                if not password:
+                    password = pair_pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed to resolve Snowflake credential pair fallback: %s", exc)
 
         missing: list[str] = []
         if not account:
@@ -219,8 +223,8 @@ class EquivalenceVerifier:
             missing.append("warehouse")
 
         if missing:
-            if "password" in missing:
-                auth_err = format_actionable_error("snowflake_password")
+            if "user" in missing or "password" in missing:
+                auth_err = format_actionable_pair_error("snowflake")
                 if len(missing) == 1:
                     err_msg = auth_err
                 else:

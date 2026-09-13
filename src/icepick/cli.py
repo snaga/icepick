@@ -21,6 +21,7 @@ from rich.table import Table
 from icepick import __version__
 from icepick.agent_context import get_agent_context
 from icepick.config import Config, ConfigResolver, RuntimeConfigSummary
+from icepick.credentials import format_actionable_pair_error, resolve_credential_pair
 from icepick.diff import apply_unified_diff, format_diff, render_diff, split_hunks
 from icepick.exceptions import AuthenticationError, ParseError
 from icepick.feedback import FeedbackRecorder
@@ -43,7 +44,6 @@ from icepick.patcher import (
     SubqueryToCTE,
     TextSplicer,
 )
-from icepick.security.credentials import format_actionable_error, resolve_credential
 from icepick.verifier.equivalence import EquivalenceVerifier
 
 app = typer.Typer(
@@ -457,19 +457,21 @@ def rewrite(
                 account = getattr(cfg, "snowflake_account", None) or os.environ.get(
                     "SNOWFLAKE_ACCOUNT"
                 )
-                user = getattr(cfg, "snowflake_user", None) or os.environ.get("SNOWFLAKE_USER")
                 database = getattr(cfg, "snowflake_database", None) or os.environ.get(
                     "SNOWFLAKE_DATABASE"
                 )
                 warehouse = getattr(cfg, "snowflake_warehouse", None) or os.environ.get(
                     "SNOWFLAKE_WAREHOUSE"
                 )
+                user = getattr(cfg, "snowflake_user", None)
                 password = getattr(cfg, "snowflake_password", None)
-                if not password:
+                if not user or not password:
                     try:
-                        password, _ = resolve_credential("snowflake_password")
-                    except Exception:  # noqa: BLE001
-                        password = os.environ.get("SNOWFLAKE_PASSWORD")
+                        pair_user, pair_pass, _ = resolve_credential_pair("snowflake")
+                        user = user or pair_user
+                        password = password or pair_pass
+                    except Exception:  # noqa: BLE001, S110
+                        pass
 
                 missing: list[str] = []
                 if not account:
@@ -484,18 +486,17 @@ def rewrite(
                     missing.append("warehouse")
 
                 if missing:
-                    if "password" in missing:
-                        auth_err = format_actionable_error("snowflake_password")
+                    if "user" in missing or "password" in missing:
+                        auth_err = format_actionable_pair_error("snowflake")
                         err_console.print(f"[bold red]Authentication Error:[/bold red] {auth_err}")
                     else:
                         err_console.print(
                             f"[bold red]Configuration Error:[/bold red] Missing required Snowflake parameter(s): {', '.join(missing)}."
                         )
-                    err_console.print(
-                        "[yellow]Actionable Advice:[/yellow] Set Snowflake credentials in environment variables "
-                        "(SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, SNOWFLAKE_DATABASE, "
-                        "SNOWFLAKE_WAREHOUSE) or via configuration file."
-                    )
+                        err_console.print(
+                            "[yellow]Actionable Advice:[/yellow] Set Snowflake credentials in environment variables "
+                            "(SNOWFLAKE_ACCOUNT, SNOWFLAKE_DATABASE, SNOWFLAKE_WAREHOUSE) or via configuration file."
+                        )
                     raise typer.Exit(code=1)
 
                 verifier = EquivalenceVerifier(dialect=dialect)
@@ -844,9 +845,9 @@ def verify(
     if result.error_message:
         err_console.print(f"[bold red]Error during verification:[/bold red] {result.error_message}")
         err_console.print(
-            "[yellow]Actionable Advice:[/yellow] Verify Snowflake connection settings via environment "
-            "variables (SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, SNOWFLAKE_DATABASE, "
-            "SNOWFLAKE_WAREHOUSE) or specify a configuration file via '--config <path>'."
+            "[yellow]Actionable Advice:[/yellow] Verify Snowflake connection settings via Windows Credential Manager "
+            "('cmdkey /generic:icepick:snowflake /user:<user> /pass:<password>') or environment "
+            "variables (SNOWFLAKE_ACCOUNT, SNOWFLAKE_DATABASE, SNOWFLAKE_WAREHOUSE) or specify a configuration file via '--config <path>'."
         )
         raise typer.Exit(code=1)
 

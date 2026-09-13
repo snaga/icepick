@@ -219,14 +219,15 @@ class TestAgentReadiness:
         # Actionable instructions must be present in stderr
         stderr_text = result.stderr
         assert "[Authentication Error]" in stderr_text
-        assert "snowflake_password" in stderr_text
+        assert "snowflake" in stderr_text
 
         # Verify PowerShell masked credential guidance
-        assert '$cred = Get-Credential -UserName "any"' in stderr_text
-        assert "cmdkey /generic:icepick:snowflake_password" in stderr_text
+        assert "$cred = Get-Credential" in stderr_text
+        assert "cmdkey /generic:icepick:snowflake" in stderr_text
 
         # Verify debug environment variable fallback guidance
-        assert '$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD="<your_key>"' in stderr_text
+        assert "$env:DEBUG_ICEPICK_SNOWFLAKE_PASSWORD=" in stderr_text
+        assert "$env:DEBUG_ICEPICK_SNOWFLAKE_USER=" in stderr_text
 
     def test_readiness_enumerated_error_on_invalid_arguments(self, tmp_path: Path) -> None:
         """Verify that invalid arguments yield exit code 1 and display accepted enum choices in stderr."""

@@ -600,6 +600,8 @@ class TestCli:
         monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "test_acct")
         monkeypatch.setenv("SNOWFLAKE_USER", "test_user")
         monkeypatch.setenv("SNOWFLAKE_PASSWORD", "test_pass")
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_USER", "test_user")
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", "test_pass")
         monkeypatch.setenv("SNOWFLAKE_DATABASE", "test_db")
         monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "test_wh")
 
@@ -656,6 +658,7 @@ class TestCli:
         monkeypatch.delenv("SNOWFLAKE_PASSWORD", raising=False)
         monkeypatch.delenv("SNOWFLAKE_DATABASE", raising=False)
         monkeypatch.delenv("SNOWFLAKE_WAREHOUSE", raising=False)
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
         monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
 
         mock_llm = MagicMock()
@@ -665,13 +668,49 @@ class TestCli:
 
         with (
             patch("icepick.cli.LLMClient", return_value=mock_llm),
-            patch("icepick.cli.resolve_credential", side_effect=Exception("Not found")),
+            patch("icepick.cli.resolve_credential_pair", side_effect=Exception("Not found")),
         ):
             result = runner.invoke(app, ["rewrite", str(sql_file), "--verify-loop"])
             assert result.exit_code == 1
-            assert "Actionable Advice:" in result.output
-            assert "Set Snowflake credentials in environment variables" in result.output
+            assert "Authentication Error:" in result.output
+            assert "icepick:snowflake" in result.output
+            assert "cmdkey" in result.output
+            assert "Get-Credential" in result.output
             assert sql_file.read_text(encoding="utf-8") == original_sql
+
+    def test_rewrite_verify_loop_missing_credentials_displays_wcm_pair_guidance(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test rewrite --verify-loop displays WCM pair guidance and exits 1 when credentials missing."""
+        sql_file = tmp_path / "correlated.sql"
+        original_sql = (
+            "SELECT c.cust_id FROM customers c "
+            "WHERE EXISTS (SELECT 1 FROM orders o WHERE o.cust_id = c.cust_id)"
+        )
+        sql_file.write_text(original_sql, encoding="utf-8")
+
+        monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
+        monkeypatch.delenv("SNOWFLAKE_USER", raising=False)
+        monkeypatch.delenv("SNOWFLAKE_PASSWORD", raising=False)
+        monkeypatch.delenv("SNOWFLAKE_DATABASE", raising=False)
+        monkeypatch.delenv("SNOWFLAKE_WAREHOUSE", raising=False)
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
+
+        mock_llm = MagicMock()
+        mock_llm.provider = "gemini"
+        mock_llm.api_key = "mock-api-key"
+        mock_llm._auth_error = None
+
+        with (
+            patch("icepick.cli.LLMClient", return_value=mock_llm),
+            patch("icepick.cli.resolve_credential_pair", side_effect=Exception("Not found")),
+        ):
+            result = runner.invoke(app, ["rewrite", str(sql_file), "--verify-loop"])
+            assert result.exit_code == 1
+            assert "icepick:snowflake" in result.output
+            assert "cmdkey" in result.output
+            assert "Get-Credential" in result.output
 
     def test_rewrite_cli_verify_loop_exhausted_retries_no_changes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -687,6 +726,8 @@ class TestCli:
         monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "test_acct")
         monkeypatch.setenv("SNOWFLAKE_USER", "test_user")
         monkeypatch.setenv("SNOWFLAKE_PASSWORD", "test_pass")
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_USER", "test_user")
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", "test_pass")
         monkeypatch.setenv("SNOWFLAKE_DATABASE", "test_db")
         monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "test_wh")
 
@@ -729,6 +770,8 @@ class TestCli:
         monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "test_acct")
         monkeypatch.setenv("SNOWFLAKE_USER", "test_user")
         monkeypatch.setenv("SNOWFLAKE_PASSWORD", "test_pass")
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_USER", "test_user")
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", "test_pass")
         monkeypatch.setenv("SNOWFLAKE_DATABASE", "test_db")
         monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "test_wh")
 
@@ -1057,6 +1100,38 @@ class TestCli:
         assert "Authentication failed" in (result.output + result.stderr)
         assert "Actionable Advice:" in (result.output + result.stderr)
         assert "Verify Snowflake connection settings" in (result.output + result.stderr)
+
+    def test_verify_cli_missing_credentials_displays_wcm_pair_guidance(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test icepick verify orig.sql opt.sql displays WCM pair guidance and exits 1 when credentials missing."""
+        f1 = tmp_path / "orig.sql"
+        f2 = tmp_path / "opt.sql"
+        f1.write_text("SELECT 1 AS col;", encoding="utf-8")
+        f2.write_text("SELECT 1 AS col;", encoding="utf-8")
+
+        for key in [
+            "SNOWFLAKE_ACCOUNT",
+            "SNOWFLAKE_USER",
+            "SNOWFLAKE_PASSWORD",
+            "SNOWFLAKE_DATABASE",
+            "SNOWFLAKE_WAREHOUSE",
+            "DEBUG_ICEPICK_SNOWFLAKE_USER",
+            "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD",
+        ]:
+            monkeypatch.delenv(key, raising=False)
+
+        with patch(
+            "icepick.verifier.equivalence.resolve_credential_pair",
+            side_effect=Exception("Not found"),
+        ):
+            result = runner.invoke(app, ["verify", str(f1), str(f2)])
+
+        assert result.exit_code == 1
+        output = result.output + (result.stderr or "")
+        assert "icepick:snowflake" in output
+        assert "cmdkey" in output
+        assert "Get-Credential" in output
 
     def test_verify_json_output(self, tmp_path: Path) -> None:
         """Test that verify --json outputs structured JSON and respects equivalence exit code."""
