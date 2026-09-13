@@ -1249,7 +1249,7 @@ class TestCli:
         result_secret = runner.invoke(
             app,
             ["config", "show", "--json"],
-            env={"GEMINI_API_KEY": "AIzaSySecretKeyExample1234567"},
+            env={"DEBUG_ICEPICK_GEMINI_API_KEY": "AIzaSySecretKeyExample1234567"},
         )
         assert result_secret.exit_code == 0
         data_secret = json.loads(result_secret.output)

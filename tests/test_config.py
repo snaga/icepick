@@ -98,7 +98,7 @@ def test_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ICEPICK_LLM_ENABLED", "1")
     monkeypatch.setenv("ICEPICK_LLM_PROVIDER", "vertex")
     monkeypatch.setenv("ICEPICK_LLM_MODEL", "gemini-1.5-pro")
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("DEBUG_ICEPICK_GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("GCP_PROJECT", "my-project")
     monkeypatch.setenv("GCP_LOCATION", "us-central1")
 
@@ -127,6 +127,11 @@ def test_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "ICEPICK_LLM_PROVIDER",
         "ICEPICK_LLM_MODEL",
         "GEMINI_API_KEY",
+        "DEBUG_ICEPICK_GEMINI_API_KEY",
+        "SNOWFLAKE_USER",
+        "DEBUG_ICEPICK_SNOWFLAKE_USER",
+        "SNOWFLAKE_PASSWORD",
+        "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD",
         "GCP_PROJECT",
         "GOOGLE_CLOUD_PROJECT",
         "GCP_LOCATION",
@@ -400,3 +405,158 @@ def test_runtime_config_summary_serialization() -> None:
     # Item accessor
     assert summary.get_item("gemini_api_key") is item_secret
     assert summary.get_item("non_existent") is None
+
+
+def test_snowflake_credentials_ignored_in_config_file(tmp_path: Path) -> None:
+    """Test that sensitive credentials in configuration files are strictly ignored."""
+    toml_file = tmp_path / "icepick.toml"
+    toml_file.write_text(
+        """
+        snowflake_account = "xy12345"
+        snowflake_user = "insecure_user"
+        snowflake_password = "insecure_password"
+        gemini_api_key = "insecure_api_key"
+        snowflake_warehouse = "compute_wh"
+        """,
+        encoding="utf-8",
+    )
+
+    resolver = ConfigResolver(config_file=toml_file, env_vars={}, use_keyring=False)
+    config, summary = resolver.resolve()
+
+    # Non-sensitive items are loaded from FILE
+    assert config.snowflake_account == "xy12345"
+    assert summary.get_source("snowflake_account") == ConfigSource.FILE
+    assert config.snowflake_warehouse == "compute_wh"
+    assert summary.get_source("snowflake_warehouse") == ConfigSource.FILE
+
+    # Sensitive items must NOT be loaded from FILE
+    assert config.snowflake_user is None
+    assert summary.get_source("snowflake_user") == ConfigSource.DEFAULT
+    assert config.snowflake_password is None
+    assert summary.get_source("snowflake_password") == ConfigSource.DEFAULT
+    assert config.gemini_api_key is None
+    assert summary.get_source("gemini_api_key") == ConfigSource.DEFAULT
+
+
+def test_snowflake_credentials_ambient_env_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test generic ambient env variables are ignored, only DEBUG_ICEPICK_* are resolved."""
+    # 1. Generic ambient variables should be ignored
+    ambient_env = {
+        "SNOWFLAKE_USER": "ambient_user",
+        "SNOWFLAKE_PASSWORD": "ambient_password",
+        "GEMINI_API_KEY": "ambient_gemini_key",
+        "SNOWFLAKE_ACCOUNT": "ambient_acct",
+    }
+    resolver = ConfigResolver(env_vars=ambient_env, use_keyring=False)
+    config, summary = resolver.resolve()
+
+    # Non-sensitive item is resolved from ENV
+    assert config.snowflake_account == "ambient_acct"
+    assert summary.get_source("snowflake_account") == ConfigSource.ENV
+
+    # Sensitive items are ignored from generic ambient env
+    assert config.snowflake_user is None
+    assert summary.get_source("snowflake_user") == ConfigSource.DEFAULT
+    assert config.snowflake_password is None
+    assert summary.get_source("snowflake_password") == ConfigSource.DEFAULT
+    assert config.gemini_api_key is None
+    assert summary.get_source("gemini_api_key") == ConfigSource.DEFAULT
+
+    # 2. DEBUG_ICEPICK_* variables must be accepted
+    debug_env = {
+        "DEBUG_ICEPICK_SNOWFLAKE_USER": "debug_sf_user",
+        "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD": "debug_sf_password",
+        "DEBUG_ICEPICK_GEMINI_API_KEY": "debug_gemini_key",
+    }
+    resolver_debug = ConfigResolver(env_vars=debug_env, use_keyring=False)
+    config_debug, summary_debug = resolver_debug.resolve()
+
+    assert config_debug.snowflake_user == "debug_sf_user"
+    assert summary_debug.get_source("snowflake_user") == ConfigSource.ENV
+    assert config_debug.snowflake_password == "debug_sf_password"
+    assert summary_debug.get_source("snowflake_password") == ConfigSource.ENV
+    assert config_debug.gemini_api_key == "debug_gemini_key"
+    assert summary_debug.get_source("gemini_api_key") == ConfigSource.ENV
+
+
+def test_snowflake_credentials_from_wcm_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test resolution of Snowflake user and password pair from WCM."""
+    import icepick.security.credentials as creds
+
+    def mock_wcm_pair(target: str) -> tuple[str, str] | None:
+        if target == "icepick:snowflake":
+            return ("my_sf_user", "my_sf_password123")
+        return None
+
+    monkeypatch.setattr(creds, "read_wcm_credential_pair_fn", mock_wcm_pair)
+
+    resolver = ConfigResolver(env_vars={}, use_keyring=True)
+    config, summary = resolver.resolve()
+
+    assert config.snowflake_user == "my_sf_user"
+    assert summary.get_source("snowflake_user") == ConfigSource.KEYRING
+    assert config.snowflake_password == "my_sf_password123"
+    assert summary.get_source("snowflake_password") == ConfigSource.KEYRING
+
+    # Runtime items must have is_secret=True
+    assert summary.items["snowflake_user"].is_secret is True
+    assert summary.items["snowflake_password"].is_secret is True
+
+
+def test_snowflake_user_is_masked_in_summary() -> None:
+    """Test snowflake_user display masking and serialization."""
+    item = RuntimeConfigItem(
+        key="snowflake_user",
+        value="analytics_engineer_prod",
+        source=ConfigSource.KEYRING,
+        is_secret=True,
+    )
+
+    # display_value() should mask
+    assert item.display_value() == "ana...prod"
+
+    summary = RuntimeConfigSummary(items={"snowflake_user": item})
+
+    # Masked serialization (mask=True)
+    masked = summary.to_dict(mask=True)
+    assert masked["snowflake_user"]["value"] == "ana...prod"
+    assert masked["snowflake_user"]["source"] == "keyring"
+
+    # Unmasked serialization (mask=False)
+    unmasked = summary.to_dict(mask=False)
+    assert unmasked["snowflake_user"]["value"] == "analytics_engineer_prod"
+    assert unmasked["snowflake_user"]["source"] == "keyring"
+
+    # Short username masking
+    short_item = RuntimeConfigItem(
+        key="snowflake_user",
+        value="root",
+        source=ConfigSource.KEYRING,
+        is_secret=True,
+    )
+    assert short_item.display_value() == "***"
+
+
+def test_snowflake_backward_compatibility_single_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test fallback to single password target (icepick:snowflake_password) when pair is missing."""
+    import icepick.security.credentials as creds
+
+    # Pair returns None, single password returns a password
+    monkeypatch.setattr(creds, "read_wcm_credential_pair_fn", lambda target: None)
+
+    def mock_wcm_single(target: str) -> str | None:
+        if target == "icepick:snowflake_password":
+            return "fallback_single_password"
+        return None
+
+    monkeypatch.setattr(creds, "read_wcm_credential_fn", mock_wcm_single)
+
+    resolver = ConfigResolver(env_vars={}, use_keyring=True)
+    config, summary = resolver.resolve()
+
+    assert config.snowflake_user is None
+    assert summary.get_source("snowflake_user") == ConfigSource.DEFAULT
+    assert config.snowflake_password == "fallback_single_password"
+    assert summary.get_source("snowflake_password") == ConfigSource.KEYRING
+
