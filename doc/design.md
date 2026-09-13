@@ -38,11 +38,11 @@
 | AST置換・最適化 | F-B3 | 局所スライスリライト | ContextSlicerとLLMClientによる局所リライト適用 | B-3 |
 | AST置換・最適化 | F-B4 | UNION ALL置換 | UNIONからUNION ALLへの決定論的ルール置換 | B-4 |
 | AST置換・最適化 | F-B5 | 明示的JOIN置換 | 暗黙クロス結合からINNER JOIN等への決定論的置換 | B-5 |
-| パイプライン・差分適用 | F-C1 | 最適化Diff生成 | icepick rewriteによるGit互換Unified Diff出力 | C-1 |
-| パイプライン・差分適用 | F-C2 | パッチ適用 | icepick patchによるファイル更新・パイプライン入力適用 | C-2 |
-| パイプライン・差分適用 | F-C3 | 対話型Hunk適用 | icepick patch --interactiveによる個別承認とシミュレーション | C-3 |
-| パイプライン・差分適用 | F-C4 | LLM Agenticリライト | icepick rewrite --agenticによる高度な最適化と外部連携 | C-4 |
-| パイプライン・差分適用 | F-C5 | 書式保持スプライシング | TextSplicerによるコメント・インデント完全保持最小Diff生成 | C-5 |
+| 処方箋駆動最適化 | F-C1 | 構造化処方箋診断 | icepick diagによる処方箋ID採番とRichカード/JSON出力 | C-1 |
+| 処方箋駆動最適化 | F-C2 | 処方箋ID選択型差分生成 | icepick diffによる特定処方箋（--rx）に絞り込んだ局所Diff生成 | C-2 |
+| 処方箋駆動最適化 | F-C3 | 処方箋ID選択型ファイル適用 | icepick fixによる特定処方箋（--rx）の元ファイル直接適用 | C-3 |
+| 処方箋駆動最適化 | F-C4 | LLM Agentic処方箋リライト | icepick diag/diff --agenticによる高度な処方箋生成・リライト | C-4 |
+| 処方箋駆動最適化 | F-C5 | 書式保持スプライシング | TextSplicerによるコメント・インデント完全保持最小Diff生成 | C-5 |
 | 等価性検証 | F-D1 | 双方向EXCEPT検証SQL生成 | icepick verifyによる決定論的等価性検証SQL出力（snow CLI委譲） | D-1 |
 | エージェント親和性・運用 | F-E1 | フリクション記録 | icepick feedbackによる課題・バグのローカル追記記録 | E-1 |
 | エージェント親和性・運用 | F-E2 | 構造化JSON出力 | 全コマンドでの機械判読可能な--json出力 | E-2 |
@@ -56,11 +56,9 @@
 | エージェント親和性・運用 | F-E10 | LLM接続診断 | icepick config testによるLLMバックエンドの疎通・認証検証 | E-10 |
 | プラガブルプロバイダ | F-F1 | プロバイダ分離・設定汎化 | BaseLLMProvider基盤と辞書形式optionsによる拡張基盤 | F-1 |
 | プラガブルプロバイダ | F-F2 | Vertex AI堅牢化・明示案内 | role: "user"準拠、マルチパート集約、--provider案内 | F-2 |
-| 処方箋駆動最適化 | F-G1 | 構造化処方箋診断 | icepick diagによる処方箋ID採番とRichカード/JSON出力 | G-1 |
-| 処方箋駆動最適化 | F-G2 | 処方箋ID選択型差分生成 | icepick diffによる特定処方箋（--rx）に絞り込んだ局所Diff生成 | G-2 |
-| 処方箋駆動最適化 | F-G3 | 処方箋ID選択型ファイル適用 | icepick fixによる特定処方箋（--rx）の元ファイル直接適用 | G-3 |
 
 ## アーキテクチャ
+
 
 
 本システムは、CLI経由でSnowflake SQLを受け取り、AST解析・診断・局所置換・差分提示・等価性検証のパイプラインを実行する。
@@ -68,37 +66,30 @@
 ```mermaid
 flowchart TD
     subgraph CLI ["icepick.cli (Command Controller)"]
-        CmdCheck["check"]
-        CmdRewrite["rewrite"]
-        CmdPatch["patch"]
+        CmdDiag["diag"]
+        CmdDiff["diff"]
+        CmdFix["fix"]
         CmdVerify["verify"]
     end
 
-    CmdCheck --> Parser["icepick.parser.SQLParser"]
+    CmdDiag --> Parser["icepick.parser.SQLParser"]
     Parser --> AST["Snowflake Root AST"]
     AST --> Linter["icepick.linter.LinterEngine"]
     Linter --> Rules["Rules (SNOW-001 ~ SNOW-007)"]
     Rules --> Issues["List[DiagnosticIssue]"]
+    Issues --> RxEngine["icepick.prescription.PrescriptionEngine"]
+    RxEngine --> Plan["PrescriptionPlan (RX-001, RX-002...)"]
 
-    CmdRewrite --> Linter
-    CmdRewrite --> Splicer["icepick.patcher.TextSplicer (Source-Preserving)"]
-    Splicer -->|Targeted Splicing| RawOpt["Modified Raw SQL Buffer"]
-    CmdRewrite -->|Full AST fallback / --reformat| Patcher["icepick.patcher.ASTPatcher"]
-    Patcher --> InPlace["In-place AST Node Replacement"]
-    Patcher -->|LLM-based| ContextSlicer["icepick.llm.ContextSlicer"]
-    ContextSlicer --> LLMClient["icepick.llm.LLMClient"]
-    LLMClient --> InPlace
-    Patcher -->|Subquery to CTE| CTEExt["icepick.patcher.SubqueryToCTE"]
-    CTEExt --> InPlace
-    RawOpt --> Diff["icepick.diff.DiffFormatter"]
-    InPlace -.->|Full AST Diff| Diff
+    CmdDiff --> RxEngine
+    CmdDiff --> Splicer["icepick.patcher.TextSplicer (Source-Preserving)"]
+    Splicer --> Diff["icepick.diff.DiffFormatter"]
     Diff --> Stdout["stdout / .patch (Clean Minimal Diff)"]
 
-    Stdout -.->|stdin / pipe| CmdPatch
-    CmdPatch --> TargetFile["Target SQL File (In-place Mutation)"]
+    CmdFix --> Splicer
+    CmdFix --> TargetFile["Target SQL File (In-place Mutation)"]
 
     CmdVerify --> Verifier["icepick.verifier.EquivalenceVerifier"]
-    TargetFile -.->|Post-apply verification| CmdVerify
+    TargetFile -.->|Post-fix verification| CmdVerify
     Verifier --> VerifySQL["verify.sql / stdout (EXCEPT Query)"]
     VerifySQL -.->|pipe / execution| SnowCLI["snow CLI / CI Pipeline"]
 ```
@@ -409,16 +400,17 @@ class PrescriptionPlan:
   - Layer 2 イントロスペクションとして、CLI の全コマンド、引数・オプション仕様、対応する最適化ルール一覧（`rule-001`〜`007`等）、環境変数スキーマ（`DEBUG_ICEPICK_*`）を単一の構造化 JSON として出力。
   - エージェントが初手で実行することで、ヘルプ探索によるトークン消費を最小化する。
 - **構造化出力 (`--json`)**:
-  - `check`: 検出された Issue の JSON 配列を出力。
-  - `rewrite`: 最適化ステータス、検出された Issue 一覧、Unified Diff テキストを JSON で出力。
-  - `patch`: 適用ステータス、適用された Hunk 数、対象ファイルパスを JSON で出力。
+  - `diag`: 処方箋プラン（`PrescriptionPlan`）の完全な JSON を出力。
+  - `diff`: 生成された Unified Diff テキストまたは処方箋適用メタデータを JSON で出力。
+  - `fix`: 適用ステータス、適用された処方箋数、変更ファイルパスを JSON で出力。
+  - `verify`: 生成された双方向 EXCEPT 検証 SQL クエリを JSON で出力。
   - `feedback`: 記録された `FeedbackEntry` を JSON で出力。
   - `agent-context`: ツール仕様メタデータを JSON で出力。
 - **非対話モードと変更境界 (`--dry-run` & `--force`)**:
   - `sys.stdin.isatty()` により対話型ターミナルかパイプ/サブプロセスかを自動判定。
   - 非 TTY 環境ではプロンプト表示による永久ハングを防止。
-  - `--dry-run`: `patch` コマンドにおいてファイルへの書き込みを一切行わず、適用シミュレーション結果のみを出力。
-  - 非TTY環境における `patch` 実行時は、確認バイパスフラグ `--force`（または `-f`）を必須とし、未指定時は安全のため処理を中止してエラーを案内。
+  - `--dry-run`: `fix` コマンドにおいてファイルへの書き込みを一切行わず、適用シミュレーション結果のみを出力。
+  - 非TTY環境における `fix` 実行時は、確認バイパスフラグ `--force`（または `-f`）を必須とし、未指定時は安全のため処理を中止してエラーを案内。
 - **自己修正エラー (Actionable & Enumerated Errors)**:
   - 引数やオプションのバリデーションエラー時、可能な値の列挙（enumリスト）と、コピペして実行可能な修正コマンド例を出力。
 
@@ -437,24 +429,21 @@ class PrescriptionPlan:
   - 認証情報が取得できない場合、シェル履歴に残さない安全な登録コマンドを含む具体的な自己修正手順を提示して exit code 1 で終了：
     - **Gemini API キー未設定時**:
       ```text
-      [Authentication Error] Gemini API Key is missing.
-      To fix this, please register your key using Windows Credential Manager:
-        # Recommended (safe, masked input without leaving secrets in history):
-        $cred = Get-Credential -UserName "any" -Message "Enter Gemini API Key"
-        cmdkey /generic:icepick:gemini_api_key /user:any /pass:$($cred.GetNetworkCredential().Password)
-
-        # Direct command:
-        cmdkey /generic:icepick:gemini_api_key /user:any /pass:<your_key>
-
-      Or set the debug environment variable:
-        $env:DEBUG_ICEPICK_GEMINI_API_KEY="<your_key>"
+      [Error] Gemini API key not found.
+      Set DEBUG_ICEPICK_GEMINI_API_KEY or register to Windows Credential Manager:
+        powershell -Command "$p = Read-Host 'Enter Key' -AsSecureString; cmdkey /generic:icepick:gemini_api_key /user:apikey /pass:([System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($p)))"
+      ```
+    - **Vertex AI 認証未設定時**:
+      ```text
+      [Error] Vertex AI credentials or project not configured.
+      Run 'gcloud auth application-default login' or specify --project / ICEPICK_VERTEX_PROJECT.
       ```
 
 ### 4.9 エージェント準備状況テスト (Agent Readiness Test)
 - 対応要件: E-8
 - **テスト設計 (`tests/test_agent_readiness.py`)**:
   1. **非TTYハング防止テスト**: `stdin` を `io.StringIO` やパイプ模倣オブジェクトに差し替え、プロンプト待ちでブロックせずに終了することを確認。
-  2. **構造化出力テスト**: 全サブコマンド（`check`, `rewrite`, `patch`, `feedback`, `agent-context`, `verify`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
+  2. **構造化出力テスト**: 全サブコマンド（`diag`, `diff`, `fix`, `verify`, `feedback`, `agent-context`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
   3. **Actionable Error検証**: 認証未設定時および不正引数指定時に、有効な enum 一覧および復旧コマンド例が出力に含まれていることを検証。
 
 ### 4.10 `ConfigResolver` & 実行時コンフィグ・フィードバック (`icepick/config.py` または `cli.py`)
@@ -485,7 +474,7 @@ class PrescriptionPlan:
 ### 4.11 LLM 接続診断エンジン (`ConnectionTester` / `icepick config test`)
 - 対応要件: E-10, F-2
 - **設計思想**:
-  - 最適化（`rewrite`）を実行する前に、LLM バックエンド（Gemini / Vertex AI）の設定が正常かつ通信可能であるかを事前検証し、初期導入時のトラブルシューティングコストを最小化する。
+  - 最適化（`diag --agentic` / `diff`）を実行する前に、LLM バックエンド（Gemini / Vertex AI）の設定が正常かつ通信可能であるかを事前検証し、初期導入時のトラブルシューティングコストを最小化する。
 - **データ構造**:
   - `ServiceTestResult`:
     - `service: str`: サービス識別子（`"llm"`）
@@ -516,7 +505,7 @@ class PrescriptionPlan:
   - `icepick config test --json`: 構造化 JSON 出力
 
 ### 4.12 処方箋駆動最適化エンジン (`PrescriptionEngine` / `icepick diag` / `diff` / `fix`)
-- 対応要件: G-1, G-2, G-3
+- 対応要件: C-1, C-2, C-3, C-4, C-5
 - **設計思想**:
   - 長大なSnowflake SQLにおいて、クエリ全体の再生成を避け、意味論的に抽出された改善点と修正指示（処方箋）を独立した単位として扱う。
   - 診断（`diag`）、差分生成（`diff`）、ファイル適用（`fix`）の3段階パイプラインに責務を分離し、ユーザーやエージェントが任意の処方箋（`--rx`）を選択的に適用できるようにする。
@@ -549,7 +538,7 @@ class PrescriptionPlan:
   - `icepick fix <file> --rx RX-001`: 指定した処方箋のみを元ファイルへインプレース適用。
   - `icepick fix <file> --dry-run`: 適用シミュレーションのみ実行（ファイル変更なし）。
 
-## シーケンス図（対話型リファクタリングフロー）
+## シーケンス図（処方箋駆動リファクタリングフロー）
 
 
 ```mermaid
@@ -560,48 +549,54 @@ sequenceDiagram
     participant CLI as icepick.cli
     participant Parser as SQLParser
     participant Linter as LinterEngine
-    participant Patcher as ASTPatcher
+    participant Rx as PrescriptionEngine
+    participant Splicer as TextSplicer
     participant Verifier as EquivalenceVerifier
-    participant Diff as DiffFormatter
     participant Snowflake as Snowflake (snow CLI)
 
-    Note over Dev,CLI: 1. 課題の診断 (Read-only)
-    Dev->>CLI: icepick check models/batch.sql
+    Note over Dev,CLI: 1. 処方箋診断 (Read-only / 課題抽出とID採番)
+    Dev->>CLI: icepick diag models/batch.sql
     CLI->>Parser: parse(sql_text)
     Parser-->>CLI: AST
     CLI->>Linter: diagnose(AST)
     Linter-->>CLI: List[DiagnosticIssue]
-    CLI->>Dev: 診断テーブル表示 (SNOW-001 ~ SNOW-007)
+    CLI->>Rx: diagnose(AST)
+    Rx-->>CLI: PrescriptionPlan (RX-001, RX-002...)
+    CLI->>Dev: 処方箋カード表示 (または --format json)
 
-    Note over Dev,CLI: 2. 最適化Diffの生成 (Read-only)
-    Dev->>CLI: icepick rewrite models/batch.sql (-o changes.patch)
-    CLI->>Linter: diagnose(AST)
-    CLI->>Patcher: apply_all(issues)
-    CLI->>Diff: format_diff(orig, opt)
-    Diff-->>CLI: Unified Diff
+    Note over Dev,CLI: 2. 処方箋ID選択型局所差分の生成 (Read-only)
+    Dev->>CLI: icepick diff models/batch.sql --rx RX-001 (-o changes.patch)
+    CLI->>Rx: generate_diff(selected_ids=['RX-001'])
+    Rx->>Splicer: splice_all(selected_issues)
+    Splicer-->>Rx: Modified SQL Buffer
+    Rx-->>CLI: Unified Diff (RX-001 のみ置換、他は完全維持)
     CLI->>Dev: Unified Diff (stdout / changes.patch)
 
-    Note over Dev,CLI: 3. パッチの適用 (Mutate, Pipe or File)
-    Dev->>CLI: icepick patch models/batch.sql changes.patch --interactive
-    loop 各Issue (Hunk) ごと
-        CLI->>Dev: Diffプレビュー表示 [y/n/q]?
-        Dev-->>CLI: 'y' (適用承認)
-    end
-    CLI->>Dev: 対象SQLファイル上書き更新完了
+    Note over Dev,CLI: 3. 処方箋ID選択型インプレース適用 (Mutate)
+    Dev->>CLI: icepick fix models/batch.sql --rx RX-001
+    CLI->>Rx: apply_fix(selected_ids=['RX-001'])
+    Rx->>Splicer: splice_all(selected_issues)
+    Splicer-->>Rx: Modified SQL Buffer
+    CLI->>Dev: 対象SQLファイル上書き更新完了 (RX-001 適用)
 
     Note over Dev,CLI: 4. 等価性検証 SQL の生成 (Verification SQL Generator)
     Dev->>CLI: icepick verify models/batch_orig.sql models/batch.sql (-o verify.sql)
     CLI->>Verifier: generate_sql(orig, opt)
     Verifier-->>CLI: 双方向 EXCEPT SQL クエリ文字列
     CLI->>Dev: 検証 SQL 出力 (stdout / verify.sql)
+
     Note over Dev,Snowflake: 5. 外部公式ツールによる実行・判定 (snow CLI / CI)
     Dev->>Snowflake: snow sql -f verify.sql (またはパイプ連携)
     Snowflake-->>Dev: 実行結果 (差分行 0 件 = 等価性合格)
 
     Note over Dev,Agent: 6. エージェントによる自律オーケストレーション (外部修復ループ)
-    Agent->>CLI: icepick rewrite models/batch.sql --agentic
-    CLI-->>Agent: 最適化パッチ (Unified Diff)
-    Agent->>CLI: icepick verify models/batch.sql optimized.sql
+    Agent->>CLI: icepick diag models/batch.sql --format json
+    CLI-->>Agent: PrescriptionPlan JSON (RX-001, RX-002...)
+    Agent->>CLI: icepick diff models/batch.sql --rx RX-001
+    CLI-->>Agent: 局所 Unified Diff
+    Agent->>CLI: icepick fix models/batch.sql --rx RX-001 --force
+    CLI-->>Agent: ファイル更新完了
+    Agent->>CLI: icepick verify models/batch_orig.sql models/batch.sql
     CLI-->>Agent: 双方向 EXCEPT SQL
     Agent->>Snowflake: snow sql -f - (パイプ実行)
     alt 差分なし (cnt == 0)
@@ -609,19 +604,6 @@ sequenceDiagram
     else 差分あり (cnt > 0)
         Snowflake-->>Agent: 差分行フィードバック (再試行プロンプトへ)
     end
-
-    Note over Dev,CLI: 7. 処方箋駆動パイプライン (diag -> diff -> fix)
-    Dev->>CLI: icepick diag models/batch.sql
-    CLI->>Parser: parse(sql_text)
-    CLI->>Linter: diagnose(AST)
-    CLI->>CLI: 処方箋生成 & ID採番 (RX-001, RX-002...)
-    CLI->>Dev: 処方箋カード表示 (または --format json)
-    Dev->>CLI: icepick diff models/batch.sql --rx RX-001
-    CLI->>CLI: 指定処方箋のみ元テキスト上で局所置換 (Splicing)
-    CLI->>Dev: ピンポイント Unified Diff 表示
-    Dev->>CLI: icepick fix models/batch.sql --rx RX-001
-    CLI->>CLI: 指定処方箋のみ元ファイルへインプレース適用
-    CLI->>Dev: ファイル更新完了
 ```
 
 
@@ -632,8 +614,8 @@ sequenceDiagram
 ### 6.1 終了コード体系 (Exit Codes)
 | 終了コード | 分類 | 発生条件・対象コマンド | エージェント推奨アクション |
 |:---:|:---|:---|:---|
-| **0** | 正常終了 (Success) | ・`check`: 課題 0 件（クリーン）<br>・`rewrite`: Diff 生成成功<br>・`patch`: パッチ適用成功<br>・`verify`: 検証 SQL 出力成功<br>・`config test`: LLM 接続検証成功 | 次のパイプラインステップへ進行。 |
-| **1** | 課題検出 / 検証不一致 / 設定・認証エラー | ・`check`: 1 件以上の DiagnosticIssue 検出<br>・`config test`: LLM 認証・通信失敗<br>・`rewrite --agentic`: LLM 認証キー未設定<br>・不正な CLI オプション / カテゴリ引数 | stderr の Actionable Advice に従い設定・認証を修復、または `rewrite` を実行。 |
+| **0** | 正常終了 (Success) | ・`diag`: 課題 0 件（クリーン）<br>・`diff`: Diff 生成成功<br>・`fix`: 処方箋適用成功<br>・`verify`: 検証 SQL 出力成功<br>・`config test`: LLM 接続検証成功 | 次のパイプラインステップへ進行。 |
+| **1** | 課題検出 / 検証不一致 / 設定・認証エラー | ・`diag`: 1 件以上の処方箋検出<br>・`config test`: LLM 認証・通信失敗<br>・`diag/diff --agentic`: LLM 認証キー未設定<br>・不正な CLI オプション / カテゴリ引数 | stderr の Actionable Advice に従い設定・認証を修復、または `diff`/`fix` を実行。 |
 | **2** | 致命的構文パースエラー / ファイル入出力エラー | ・入力 SQL の Snowflake 構文パース失敗 (`ParseError`)<br>・対象ファイル不存在 / 読み込み・書き込み権限不足 | SQL の構文修正、またはファイルパスの存在確認。 |
 
 ### 6.2 Fail-Safe 設計 & 自動フォールバック
@@ -650,5 +632,5 @@ sequenceDiagram
   - 不正引数時: サポートされている選択肢の一覧（例: `['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']`）を出力。
 
 ### 6.4 非対話環境（CI / Agent）でのハングアップ防止
-- `patch --interactive` 等のプロンプト入力が必要な機能は、非 TTY 環境（パイプ入力やエージェント実行環境）で呼び出された場合、永久に入力待ちハングアップすることなく、`--force` フラグの指定を促すエラーを出力して直ちに終了コード 1 でフェイルする。
+- `fix` コマンド等において、非 TTY 環境（パイプ入力やエージェント実行環境）でファイル直接更新を行う場合、予期せぬ破壊を防ぐため `--force` フラグの指定を必須とし、未指定時は直ちに終了コード 1 で安全にフェイルする。
 
