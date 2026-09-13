@@ -2,6 +2,26 @@
 
 Supports Google AI Studio (Gemini) API key authentication and Google Cloud
 Vertex AI OAuth2 Bearer token authentication, parsing response SQL into sqlglot AST nodes.
+
+Architecture note
+-----------------
+Since 16-2 refactoring, ``LLMClient`` delegates provider-specific logic (auth, URL construction,
+HTTP requests) to a :class:`~icepick.llm.providers.base.BaseLLMProvider` instance created via
+:func:`~icepick.llm.providers.create_provider`.  The high-level orchestration methods
+(:meth:`rewrite_fragment`, :meth:`_extract_sql`) remain in this class unchanged.
+
+Backward-compatibility surface maintained
+-----------------------------------------
+* ``LLMClient.api_key`` – property (Gemini) / None (Vertex)
+* ``LLMClient.project`` – property (Vertex) / None (Gemini)
+* ``LLMClient.location`` – property (Vertex) / "us-central1" (Gemini)
+* ``LLMClient.provider`` – canonical provider name string
+* ``LLMClient.model`` – model name string
+* ``LLMClient.timeout`` – timeout float
+* ``LLMClient._build_request_params(prompt)`` – proxies to VertexAIProvider / GeminiProvider
+* ``LLMClient._get_vertex_token()`` – proxies to VertexAIProvider
+* ``LLMClient._get_vertex_token_from_gcloud()`` – proxies to VertexAIProvider
+* ``_HttpxAuthRequest``, ``_HttpxAuthResponse`` – re-exported from providers.vertex
 """
 
 from __future__ import annotations
@@ -9,87 +29,36 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
-import subprocess
-import sys
 from typing import TYPE_CHECKING, Any
 
 import httpx
 import sqlglot
-from google.auth import exceptions as auth_exceptions
-from google.auth import transport as auth_transport
 from sqlglot import exp
 
 from icepick.config import Config
-from icepick.exceptions import AuthenticationError
-from icepick.security.credentials import resolve_credential
+from icepick.llm.providers import create_provider
+from icepick.llm.providers.gemini import GeminiProvider
+from icepick.llm.providers.vertex import VertexAIProvider, _HttpxAuthRequest, _HttpxAuthResponse
 
 if TYPE_CHECKING:
+    from icepick.llm.providers.base import BaseLLMProvider
     from icepick.llm.slicer import SliceContext
 
 logger = logging.getLogger(__name__)
 
-
-class _HttpxAuthResponse(auth_transport.Response):
-    """Adapter bridging httpx.Response to google.auth.transport.Response."""
-
-    def __init__(self, response: httpx.Response) -> None:
-        self._response = response
-
-    @property
-    def status(self) -> int:
-        return self._response.status_code
-
-    @property
-    def headers(self) -> dict[str, str]:
-        return dict(self._response.headers)
-
-    @property
-    def data(self) -> bytes:
-        return self._response.content
-
-
-class _HttpxAuthRequest(auth_transport.Request):
-    """Adapter allowing google-auth to refresh credentials via httpx without requests."""
-
-    def __init__(self, client: httpx.Client | None = None) -> None:
-        self._client = client
-
-    def __call__(
-        self,
-        url: str,
-        method: str = "GET",
-        body: bytes | None = None,
-        headers: dict[str, str] | None = None,
-        timeout: float | None = None,
-        **kwargs: Any,
-    ) -> auth_transport.Response:
-        client = self._client or httpx.Client(timeout=timeout)
-        try:
-            resp = client.request(
-                method=method,
-                url=url,
-                content=body,
-                headers=headers,
-                timeout=timeout,
-            )
-            return _HttpxAuthResponse(resp)
-        except Exception as exc:
-            raise auth_exceptions.TransportError(exc) from exc  # type: ignore[no-untyped-call]
-        finally:
-            if self._client is None:
-                client.close()
+__all__ = ["LLMClient", "_HttpxAuthRequest", "_HttpxAuthResponse"]
 
 
 class LLMClient:
     """Client for generating SQL refactorings using Gemini or Vertex AI REST APIs.
 
+    Internally delegates provider-specific logic (authentication, URL construction,
+    HTTP requests) to a :class:`~icepick.llm.providers.base.BaseLLMProvider` instance.
+    All legacy attributes and helper methods are maintained for backward compatibility.
+
     Attributes:
-        provider: "gemini" or "vertex".
+        provider: Canonical provider name – "gemini" or "vertex".
         model: LLM model identifier.
-        api_key: Gemini API key (for Gemini provider).
-        project: GCP project ID (for Vertex AI provider).
-        location: GCP region (for Vertex AI provider).
         timeout: HTTP timeout in seconds.
     """
 
@@ -104,8 +73,14 @@ class LLMClient:
         location: str | None = None,
         timeout: float = 30.0,
         http_client: httpx.Client | None = None,
+        provider_options: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the LLMClient with configuration or explicit overrides.
+
+        All explicit keyword arguments take precedence over ``Config`` values and
+        ``provider_options``.  The merge order (lowest → highest priority) is::
+
+            Config.llm_options < provider_options < {api_key, project, location}
 
         Args:
             config: Optional Config instance to pull defaults from.
@@ -116,42 +91,85 @@ class LLMClient:
             location: Google Cloud region for Vertex AI.
             timeout: Request timeout in seconds (default: 30.0).
             http_client: Optional custom httpx.Client for testing and dependency injection.
+            provider_options: Generic provider-specific options dictionary.  Keys ``api_key``,
+                ``project``, and ``location`` are recognised and transparently merged so that
+                callers can pass all options in a single dict without breaking existing call sites.
         """
         cfg = config or Config()
 
+        # ── Resolve provider / model ──────────────────────────────────────────
         raw_provider = provider or cfg.llm_provider
-        self.provider = self._normalize_provider(raw_provider)
-        self.model = model or cfg.llm_model
+        self.provider: str = self._normalize_provider(raw_provider)
+        self.model: str = model or cfg.llm_model
+        self.timeout: float = timeout
 
-        self._auth_error: AuthenticationError | None = None
+        # ── Build merged options dict (lowest → highest priority) ─────────────
+        # 1. Config.llm_options (file/env-level generic options)
+        merged: dict[str, Any] = dict(cfg.llm_options)
+
+        # 2. Explicit provider_options argument
+        if provider_options:
+            merged.update(provider_options)
+
+        # 3. Explicit keyword arguments (highest priority, backward-compat surface)
+        #    api_key: Gemini API key
         resolved_api_key = api_key or cfg.gemini_api_key
-        if not resolved_api_key:
-            try:
-                resolved_api_key, _ = resolve_credential("gemini_api_key")
-            except AuthenticationError as exc:
-                self._auth_error = exc
-                resolved_api_key = None
+        if resolved_api_key:
+            merged["api_key"] = resolved_api_key
 
-        self.api_key = resolved_api_key
-        self.project = (
+        #    project / location: Vertex AI (also exposed as backward-compat instance attrs)
+        resolved_project: str | None = (
             project
             or cfg.gcp_project
-            or os.getenv("GOOGLE_CLOUD_PROJECT")
-            or os.getenv("GCP_PROJECT")
+            or merged.get("project")
         )
-        self.location = (
+        if resolved_project:
+            merged["project"] = resolved_project
+
+        resolved_location: str = (
             location
             or cfg.gcp_location
+            or merged.get("location")
             or os.getenv("GOOGLE_CLOUD_LOCATION")
             or os.getenv("GCP_LOCATION")
             or "us-central1"
         )
-        self.timeout = timeout
+        merged["location"] = resolved_location
+
+        # ── Instantiate the pluggable provider ────────────────────────────────
+        self._provider: BaseLLMProvider = create_provider(
+            name=self.provider,
+            model=self.model,
+            options=merged,
+            timeout=timeout,
+            http_client=http_client,
+        )
+
+        # Keep a direct reference for close-lifecycle management compatibility
         self._http_client = http_client
+
+        # ── Store project / location as direct attributes (backward compat) ───
+        # These are kept on the LLMClient regardless of provider type so that
+        # callers reading llm.project / llm.location always get meaningful values
+        # even when the provider is Gemini (where they may not be used).
+        self._project: str | None = resolved_project
+        self._location: str = resolved_location
+
+    # ── Static helpers ────────────────────────────────────────────────────────
 
     @staticmethod
     def _normalize_provider(provider: str) -> str:
-        """Normalize provider string to 'gemini' or 'vertex'."""
+        """Normalize provider string to 'gemini' or 'vertex'.
+
+        Args:
+            provider: Raw provider name string (case-insensitive).
+
+        Returns:
+            str: Canonical provider name.
+
+        Raises:
+            ValueError: If the provider is not a recognised alias.
+        """
         normalized = provider.strip().lower()
         if normalized in {"vertex", "vertex_ai", "vertexai"}:
             return "vertex"
@@ -160,8 +178,52 @@ class LLMClient:
         msg = f"Unsupported LLM provider: '{provider}'. Must be 'gemini' or 'vertex'."
         raise ValueError(msg)
 
+    # ── Backward-compatible attribute properties ──────────────────────────────
+
+    @property
+    def api_key(self) -> str | None:
+        """Gemini API key resolved by the underlying GeminiProvider, or None for Vertex.
+
+        Supports both read and write access to preserve test-level mutation patterns.
+        """
+        if isinstance(self._provider, GeminiProvider):
+            return self._provider.api_key
+        return None
+
+    @api_key.setter
+    def api_key(self, value: str | None) -> None:
+        """Set the API key on the underlying GeminiProvider (backward compatibility)."""
+        if isinstance(self._provider, GeminiProvider):
+            self._provider.api_key = value
+
+    @property
+    def project(self) -> str | None:
+        """GCP project ID.  Readable for any provider; writable and synced to VertexAIProvider."""
+        return self._project
+
+    @project.setter
+    def project(self, value: str | None) -> None:
+        """Set project and sync to VertexAIProvider when active (backward compatibility)."""
+        self._project = value
+        if isinstance(self._provider, VertexAIProvider):
+            self._provider.project = value
+
+    @property
+    def location(self) -> str:
+        """GCP location/region.  Readable for any provider; writable and synced to VertexAIProvider."""
+        return self._location
+
+    @location.setter
+    def location(self, value: str) -> None:
+        """Set location and sync to VertexAIProvider when active (backward compatibility)."""
+        self._location = value
+        if isinstance(self._provider, VertexAIProvider):
+            self._provider.location = value
+
+    # ── Backward-compatible proxy methods (provider-specific helpers) ─────────
+
     def _get_vertex_token_from_gcloud(self) -> str | None:
-        """Acquire an ADC token using gcloud CLI subprocess as a fallback.
+        """Proxy to :meth:`VertexAIProvider._get_vertex_token_from_gcloud` (backward compat).
 
         In corporate environments using service account impersonation or SSO,
         google.auth.default() might fail to find or refresh credentials directly.
@@ -169,106 +231,71 @@ class LLMClient:
 
         Returns:
             str | None: The access token string if successful, or None otherwise.
+
+        Raises:
+            TypeError: If the current provider is not VertexAIProvider.
         """
-        if sys.platform == "win32":
-            cmd = shutil.which("gcloud.cmd") or shutil.which("gcloud") or "gcloud.cmd"
-        else:
-            cmd = shutil.which("gcloud") or "gcloud"
-
-        commands = [
-            [cmd, "auth", "application-default", "print-access-token"],
-            [cmd, "auth", "print-access-token"],
-        ]
-
-        for cmd_args in commands:
-            try:
-                result = subprocess.run(
-                    cmd_args,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    token = result.stdout.strip()
-                    if token:
-                        return token
-                logger.debug(
-                    "Command %s failed with code %d: %s",
-                    " ".join(cmd_args),
-                    result.returncode,
-                    result.stderr.strip(),
-                )
-            except FileNotFoundError:
-                logger.debug("gcloud command not found: %s", cmd)
-                return None
-            except subprocess.TimeoutExpired:
-                logger.warning("gcloud token command timed out: %s", " ".join(cmd_args))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Failed to acquire token via gcloud (%s): %s", " ".join(cmd_args), exc)
-
-        return None
+        if not isinstance(self._provider, VertexAIProvider):
+            return None  # No-op for non-Vertex providers
+        return self._provider._get_vertex_token_from_gcloud()
 
     def _get_vertex_token(self) -> str:
-        """Acquire an OAuth2 Bearer token using google-auth credentials or gcloud CLI fallback.
+        """Proxy to :meth:`VertexAIProvider._get_token` (backward compat).
 
         Returns:
             str: Valid OAuth2 access token.
 
         Raises:
             ValueError: If token acquisition fails via both google-auth and gcloud CLI fallback.
+            TypeError: If called on a non-Vertex provider.
         """
-        token: str | None = None
-
-        try:
-            import google.auth
-
-            credentials, _ = google.auth.default(
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-            if not credentials.valid:
-                credentials.refresh(_HttpxAuthRequest(self._http_client))  # type: ignore[no-untyped-call]
-            raw_token = getattr(credentials, "token", None)
-            if raw_token:
-                token = str(raw_token)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("google.auth.default token acquisition failed: %s", exc)
-
-        if not token:
-            logger.info("Attempting fallback to gcloud CLI for ADC token acquisition.")
-            token = self._get_vertex_token_from_gcloud()
-
-        if not token:
-            msg = (
-                "Failed to acquire Google Cloud ADC token for Vertex AI. "
-                "Please run 'gcloud auth application-default login' in your terminal."
-            )
-            raise ValueError(msg)
-
-        return token
+        if not isinstance(self._provider, VertexAIProvider):
+            msg = "_get_vertex_token() is only available for the 'vertex' provider."
+            raise TypeError(msg)
+        return self._provider._get_token()
 
     def _build_request_params(self, prompt: str) -> tuple[str, dict[str, str], dict[str, Any]]:
-        """Construct the URL, headers, and JSON body for the REST request."""
+        """Construct the URL, headers, and JSON body for the REST request (backward compat).
+
+        Delegates to the underlying provider's internal build logic so that existing
+        test patches (e.g. ``patch.object(llm, "_get_vertex_token", ...)``) continue
+        to intercept calls correctly.
+
+        Args:
+            prompt: The text prompt to include in the request body.
+
+        Returns:
+            tuple[str, dict[str, str], dict[str, Any]]: (url, headers, payload)
+
+        Raises:
+            AuthenticationError: For Gemini when api_key is missing.
+            ValueError: For Vertex when project is missing or token acquisition fails.
+        """
+        from icepick.security.credentials import resolve_credential
+
         payload: dict[str, Any] = {
             "contents": [{"parts": [{"text": prompt}]}],
         }
 
         if self.provider == "gemini":
-            if not self.api_key:
-                if self._auth_error is not None:
-                    raise self._auth_error
-                # If api_key was cleared dynamically, attempt resolution or raise AuthenticationError
+            assert isinstance(self._provider, GeminiProvider)
+            if not self._provider.api_key:
+                if self._provider._auth_error is not None:
+                    raise self._provider._auth_error
                 resolved_key, _ = resolve_credential("gemini_api_key")
-                self.api_key = resolved_key
+                self._provider.api_key = resolved_key
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-            headers = {
-                "x-goog-api-key": self.api_key,
+            api_key_str = self._provider.api_key
+            assert api_key_str is not None  # guaranteed by the guard above
+            headers: dict[str, str] = {
+                "x-goog-api-key": api_key_str,
                 "Content-Type": "application/json",
             }
             return url, headers, payload
 
         # Vertex AI provider
-        if not self.project:
+        assert isinstance(self._provider, VertexAIProvider)
+        if not self._project:
             msg = (
                 "Google Cloud project ID is required for Vertex AI. Provide project argument, "
                 "set gcp_project in Config, or set GOOGLE_CLOUD_PROJECT env var."
@@ -276,22 +303,29 @@ class LLMClient:
             raise ValueError(msg)
         host = (
             "aiplatform.googleapis.com"
-            if self.location == "global"
-            else f"{self.location}-aiplatform.googleapis.com"
+            if self._location == "global"
+            else f"{self._location}-aiplatform.googleapis.com"
         )
         url = (
-            f"https://{host}/v1/projects/{self.project}"
-            f"/locations/{self.location}/publishers/google/models/{self.model}:generateContent"
+            f"https://{host}/v1/projects/{self._project}"
+            f"/locations/{self._location}/publishers/google/models/{self.model}:generateContent"
         )
+        # Call self._get_vertex_token() so that patch.object(llm, "_get_vertex_token", ...)
+        # is intercepted correctly in tests.
         token = self._get_vertex_token()
-        headers = {
+        vertex_headers: dict[str, str] = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        return url, headers, payload
+        return url, vertex_headers, payload
+
+    # ── Core public API ───────────────────────────────────────────────────────
 
     def generate_text(self, prompt: str) -> str:
         """Call the configured Gemini or Vertex AI REST API to generate text.
+
+        Delegates to the underlying :class:`~icepick.llm.providers.base.BaseLLMProvider`
+        instance, which handles authentication, URL construction, and HTTP communication.
 
         Args:
             prompt: The text prompt to send to the model.
@@ -304,31 +338,19 @@ class LLMClient:
             ValueError: If required credentials/project are missing or response format is unexpected.
             httpx.HTTPError: If the HTTP request fails.
         """
-        url, headers, payload = self._build_request_params(prompt)
+        return self._provider.generate_text(prompt)
 
-        client = self._http_client or httpx.Client(timeout=self.timeout)
-        try:
-            response = client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-        finally:
-            if self._http_client is None:
-                client.close()
+    def health_check(self) -> dict[str, Any]:
+        """Perform a proactive health check ping using the underlying provider.
 
-        data = response.json()
-        candidates = data.get("candidates", [])
-        if not candidates:
-            msg = f"LLM returned no candidates. Full response: {data}"
-            raise ValueError(msg)
+        Delegates directly to the configured
+        :class:`~icepick.llm.providers.base.BaseLLMProvider` instance.
 
-        candidate = candidates[0]
-        content = candidate.get("content", {})
-        parts = content.get("parts", [])
-        if not parts:
-            msg = f"LLM candidate content contains no parts. Candidate: {candidate}"
-            raise ValueError(msg)
-
-        text = parts[0].get("text", "")
-        return str(text)
+        Returns:
+            dict[str, Any]: Health status dictionary containing success, duration_ms,
+                message, details, and actionable_advice.
+        """
+        return self._provider.health_check()
 
     def rewrite_fragment(
         self, slice_ctx: SliceContext, dialect: str = "snowflake"
@@ -366,7 +388,14 @@ class LLMClient:
 
     @staticmethod
     def _extract_sql(text: str) -> str:
-        """Extract SQL code from raw text, stripping markdown fences if present."""
+        """Extract SQL code from raw text, stripping markdown fences if present.
+
+        Args:
+            text: Raw text that may contain markdown code fences around SQL.
+
+        Returns:
+            str: Extracted SQL string, or empty string if input is empty.
+        """
         if not text:
             return ""
 

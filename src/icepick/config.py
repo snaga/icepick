@@ -137,6 +137,8 @@ class Config:
         gemini_api_key: API key for Google AI Studio Gemini API (or loaded via GEMINI_API_KEY env).
         gcp_project: GCP project ID when using Vertex AI.
         gcp_location: GCP location/region when using Vertex AI.
+        llm_options: Generic provider-specific options passed to the pluggable LLM provider.
+            Supports arbitrary key-value pairs from [llm.options] TOML table or llm_options JSON key.
         snowflake_account: Snowflake account identifier.
         snowflake_user: Snowflake username.
         snowflake_password: Optional Snowflake password.
@@ -159,6 +161,7 @@ class Config:
     gemini_api_key: str | None = None
     gcp_project: str | None = None
     gcp_location: str | None = None
+    llm_options: dict[str, Any] = field(default_factory=dict)
     snowflake_account: str | None = None
     snowflake_user: str | None = None
     snowflake_password: str | None = None
@@ -172,6 +175,8 @@ class Config:
         self.dialect = self.dialect.strip().lower()
         self.enabled_rules = [r.strip().upper() for r in self.enabled_rules if r.strip()]
         self.disabled_rules = [r.strip().upper() for r in self.disabled_rules if r.strip()]
+        if not isinstance(self.llm_options, dict):
+            self.llm_options = {}
         self.validate()
 
     def validate(self) -> None:
@@ -332,7 +337,28 @@ class ConfigResolver:
             return {}
 
         # Strictly exclude secrets from config files to prevent accidental leakage
-        return {k: v for k, v in config_data.items() if k not in self.SECRET_KEYS}
+        result = {k: v for k, v in config_data.items() if k not in self.SECRET_KEYS}
+
+        # Merge [llm.options] TOML sub-table (or "llm_options" flat key in JSON) into llm_options.
+        # Priority: explicit "llm_options" dict key first, then nested [llm][options] sub-table.
+        merged_llm_options: dict[str, Any] = {}
+
+        # TOML: [llm.options] appears as data["llm"]["options"] inside config_data
+        llm_section = config_data.get("llm")
+        if isinstance(llm_section, dict):
+            opts = llm_section.get("options")
+            if isinstance(opts, dict):
+                merged_llm_options.update(opts)
+
+        # Flat key "llm_options" (e.g. JSON: {"llm_options": {...}}) overrides nested [llm.options]
+        flat_opts = result.get("llm_options")
+        if isinstance(flat_opts, dict):
+            merged_llm_options.update(flat_opts)
+
+        if merged_llm_options:
+            result["llm_options"] = merged_llm_options
+
+        return result
 
     def _get_env_value(self, key: str, env: dict[str, str]) -> Any:
         """Extract and parse value for a key from environment variables mapping."""

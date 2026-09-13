@@ -558,7 +558,29 @@ icepick rewrite models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 
 プロジェクト直下に `icepick.json` または `.icepick.toml` を配置することで、チーム全体で共通のルールや Snowflake 接続構成（インフラ設定）、動作オプションをコード管理できます。
 
-#### 基本サンプル (`icepick.json`)
+#### 基本サンプル (`.icepick.toml` / `icepick.json`)
+
+**TOML形式 (`.icepick.toml` - 推奨)**:
+```toml
+dialect = "snowflake"
+snowflake_account = "xy12345.ap-northeast-1.aws"
+snowflake_database = "ANALYTICS"
+snowflake_schema = "PUBLIC"
+snowflake_warehouse = "COMPUTE_WH"
+snowflake_role = "SYSADMIN"
+disabled_rules = ["SNOW-007"]
+
+llm_enabled = true
+llm_provider = "vertex"
+llm_model = "gemini-1.5-pro"
+
+# プラガブル LLM プロバイダ固有オプション
+[llm.options]
+project = "my-company-gcp-project"
+location = "global"
+```
+
+**JSON形式 (`icepick.json`)**:
 ```json
 {
   "dialect": "snowflake",
@@ -577,7 +599,11 @@ icepick rewrite models/batch.sql --agentic -p vertex -m gemini-1.5-pro
   "llm_provider": "vertex",
   "llm_model": "gemini-1.5-pro",
   "gcp_project": "my-company-gcp-project",
-  "gcp_location": "global"
+  "gcp_location": "global",
+  "llm_options": {
+    "project": "my-company-gcp-project",
+    "location": "global"
+  }
 }
 ```
 
@@ -613,15 +639,23 @@ icepick rewrite models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 | `llm_model` | `string` | `"gemini-3.8-flash"` | 使用する LLM モデル名。 |
 | `gcp_project` | `string \| null` | `null` | Vertex AI 利用時の Google Cloud プロジェクト ID。 |
 | `gcp_location` | `string \| null` | `"us-central1"` | Vertex AI 利用時の Google Cloud リージョン（`"global"` 推奨）。 |
+| `llm_options` | `object (dict)` | `{}` | プラガブル LLM プロバイダへ渡す固有オプション辞書（`.icepick.toml` の `[llm.options]` セクション）。 |
+
+#### 🔌 プラガブル LLM プロバイダ構成と拡張性 (Pluggable Architecture)
+Icepick はオープン・クローズドの原則（OCP）に基づき、LLM バックエンドの接続基盤を**プラガブルアーキテクチャ**として設計しています。
+- **プロバイダ固有オプションの柔軟な指定**:
+  `.icepick.toml` の `[llm.options]` セクション（または JSON の `llm_options` キー）を通じて、各プロバイダ固有のパラメータ（`project`, `location`, 各種エンドポイント設定など）を汎用 Dict として安全に渡すことができます。
+- **新規プロバイダの動的登録・差し替え**:
+  `icepick.llm.providers.base.BaseLLMProvider` を継承して `name`, `generate_text()`, `health_check()` を実装し、`register_provider()` で登録することで、既存のコアエンジン（`LLMClient` や `ConnectionTester`）に手を加えることなく新しいカスタムプロバイダ（OpenAI, Anthropic, ローカルLLM等）を追加・拡張可能です。
 
 #### 設定ファイルを指定して CLI を実行する
 `--config`（または `-c`）オプションで設定ファイルを指定して実行します。
 ```bash
 # 診断時
-icepick check models/batch_mart.sql --config icepick.json
+icepick check models/batch_mart.sql --config .icepick.toml
 
 # 最適化時
-icepick rewrite models/batch_mart.sql -c icepick.json
+icepick rewrite models/batch_mart.sql -c .icepick.toml
 ```
 
 ---

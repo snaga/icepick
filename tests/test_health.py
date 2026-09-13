@@ -156,6 +156,80 @@ class TestConnectionTesterLLM:
         assert result.actionable_advice is not None
         assert "timed out" in result.actionable_advice
 
+    def test_llm_check_provider_health_check_success_integration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify test_llm integrates provider health_check dictionary output on success."""
+        mock_client = MagicMock()
+        mock_client.provider = "gemini"
+        mock_client.model = "gemini-3.8-flash"
+        mock_client.health_check.return_value = {
+            "success": True,
+            "duration_ms": 12.34,
+            "message": "Successfully connected to Gemini (gemini-3.8-flash).",
+            "details": {
+                "provider": "gemini",
+                "model": "gemini-3.8-flash",
+                "response_snippet": "pong response",
+            },
+            "actionable_advice": None,
+        }
+
+        monkeypatch.setattr(
+            "icepick.health.tester.LLMClient",
+            MagicMock(return_value=mock_client),
+        )
+
+        tester = ConnectionTester()
+        cfg = Config(llm_provider="gemini", llm_model="gemini-3.8-flash")
+        result = tester.test_llm(cfg, timeout=5.0)
+
+        assert result.service == "llm"
+        assert result.success is True
+        assert result.duration_ms == 12.34
+        assert result.message == "Successfully connected to LLM provider."
+        assert result.details["provider"] == "gemini"
+        assert result.details["response_snippet"] == "pong response"
+        assert result.actionable_advice is None
+
+    def test_llm_check_provider_health_check_failure_integration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify test_llm integrates provider health_check dictionary output on failure."""
+        mock_client = MagicMock()
+        mock_client.provider = "vertex"
+        mock_client.model = "gemini-2.5-flash"
+        mock_client.project = "proj"
+        mock_client.location = "us-central1"
+        mock_client.health_check.return_value = {
+            "success": False,
+            "duration_ms": 45.67,
+            "message": "Token acquisition failed",
+            "details": {
+                "provider": "vertex",
+                "model": "gemini-2.5-flash",
+                "project": "proj",
+                "location": "us-central1",
+            },
+            "actionable_advice": "Please run 'gcloud auth application-default login'",
+        }
+
+        monkeypatch.setattr(
+            "icepick.health.tester.LLMClient",
+            MagicMock(return_value=mock_client),
+        )
+
+        tester = ConnectionTester()
+        cfg = Config(llm_provider="vertex", llm_model="gemini-2.5-flash")
+        result = tester.test_llm(cfg, timeout=5.0)
+
+        assert result.service == "llm"
+        assert result.success is False
+        assert result.duration_ms == 45.67
+        assert result.message == "Token acquisition failed"
+        assert result.details["provider"] == "vertex"
+        assert result.actionable_advice == "Please run 'gcloud auth application-default login'"
+
 
 class TestConnectionTesterSnowflake:
     """Test suite for Snowflake connection testing in ConnectionTester."""

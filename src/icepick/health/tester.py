@@ -125,10 +125,56 @@ class ConnectionTester:
 
         try:
             client = LLMClient(config=cfg, timeout=timeout)
+
+            # Delegate to provider health_check if supported and returns a dict
+            health_res: dict[str, Any] | None = None
+            if hasattr(client, "health_check"):
+                try:
+                    res = client.health_check()
+                    if isinstance(res, dict):
+                        health_res = res
+                except Exception:  # noqa: BLE001
+                    health_res = None
+            elif hasattr(client, "_provider") and hasattr(client._provider, "health_check"):
+                try:
+                    res = client._provider.health_check()
+                    if isinstance(res, dict):
+                        health_res = res
+                except Exception:  # noqa: BLE001
+                    health_res = None
+
+            if isinstance(health_res, dict):
+                success = bool(health_res.get("success", False))
+                details = dict(health_res.get("details", {}))
+                if "provider" not in details:
+                    details["provider"] = getattr(client, "provider", norm_provider)
+                if "model" not in details:
+                    details["model"] = getattr(client, "model", model)
+                if getattr(client, "provider", norm_provider) == "vertex":
+                    if "project" not in details and getattr(client, "project", None):
+                        details["project"] = client.project
+                    if "location" not in details and getattr(client, "location", None):
+                        details["location"] = client.location
+
+                duration_ms = float(
+                    health_res.get("duration_ms", round((time.perf_counter() - start) * 1000.0, 2))
+                )
+                message = "Successfully connected to LLM provider." if success else str(health_res.get("message", ""))
+                advice = health_res.get("actionable_advice")
+
+                return ServiceTestResult(
+                    service="llm",
+                    success=success,
+                    duration_ms=duration_ms,
+                    message=message,
+                    details=details,
+                    actionable_advice=advice,
+                )
+
             response = client.generate_text("ping")
             duration_ms = round((time.perf_counter() - start) * 1000.0, 2)
 
-            details: dict[str, Any] = {
+            details = {
                 "provider": client.provider,
                 "model": client.model,
                 "response_snippet": response[:100].strip() if response else "",
