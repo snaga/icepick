@@ -12,7 +12,7 @@
 
 ### 2. CLI & ターミナルUI
 - **`typer`**:
-  - サブコマンド（`check`, `rewrite`, `patch`, `verify`, `config`, `feedback`, `agent-context`）およびオプションフラグ管理。
+  - サブコマンド（`diag`, `diff`, `fix`, `verify`, `config`, `feedback`, `agent-context`）およびオプションフラグ管理。
 - **`rich`**:
   - 診断レポートテーブル、カラーDiffシンタックスハイライト、プログレスバー、ステータスバッジの描画。
 

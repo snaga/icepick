@@ -30,10 +30,10 @@ Snowflake上で稼働する長大かつ複雑なバッチクエリ（数百〜�
    - LLMやルールが生成した修正コードを、構文木上で該当ノードのみ機械的に差し替え（`node.replace()`）。
    - クエリ全体の95%の健全なコード構造・インデント・コメントを完全維持。
 
-5. **パイプライン連携とUnified Diffによる安全な適用 (rewrite & patch)**:
-   - `icepick rewrite`: AST最適化を行い、ノイズのないGit互換Unified Diff/パッチを標準出力に出力（非破壊・Read-only）。
-   - `icepick patch`: 標準入力（`icepick rewrite query.sql | icepick patch query.sql`）またはパッチファイルから安全に変更を適用（唯一のファイル変更コマンド）。
-   - `git add -p` と同様の対話型Hunk個別承認・適用（`--interactive`）およびシミュレーション（`--dry-run`）をサポート。
+5. **処方箋駆動パイプラインと局所適用 (diag, diff, fix)**:
+   - `icepick diag`: 課題検出と同時に一意な処方箋ID（`RX-001`, `RX-002`...）を採番し、人間向けRichカードまたは機械向けJSONとして構造化提示（非破壊・Read-only）。
+   - `icepick diff`: 指定した処方箋（`--rx`）のみを元テキスト上で局所置換（Splicing）し、コメントやインデントを100%保持した最小Unified Diffを生成（非破壊・Read-only）。
+   - `icepick fix`: 指定した処方箋（`--rx`）のみを元ファイルへインプレース適用（唯一のファイル変更コマンド）。シミュレーション（`--dry-run`）およびエージェント向け安全ガード（`--force`）をサポート。
 
 6. **双方向EXCEPT等価性検証SQL生成 (Equivalence Verification SQL Generator)**:
    - 最適化前後のクエリが数学的・意味論的に等価であるかを判定するための双方向 `EXCEPT` クエリ（差分行出力または `--count-only` 件数集約）を副作用なく決定論的に生成。

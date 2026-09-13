@@ -49,6 +49,11 @@ Snowflake_Query_Optimizer_PoC/
 │       │   ├── subquery_to_cte.py # SubqueryToCTE (CTE自動平坦化)
 │       │   ├── splicer.py      # TextSplicer (元コード最小スプライシング)
 │       │   └── agentic.py      # AgenticPatcher (LLM連携パッチ適用)
+│       ├── prescription/       # 処方箋駆動最適化エンジン (ADR-0005, ADR-0006)
+│       │   ├── __init__.py
+│       │   ├── models.py       # Prescription, PrescriptionPlan, PrescriptionTarget
+│       │   ├── engine.py       # PrescriptionEngine (diagnose, generate_diff, apply_fixes)
+│       │   └── README.md       # L1 Intent (モジュール責務とWhy)
 │       ├── llm/                # 局所コンテキスト抽出 & LLM連携
 │       │   ├── __init__.py
 │       │   ├── slicer.py       # ContextSlicer (最小ASTスライス)
@@ -71,11 +76,14 @@ Snowflake_Query_Optimizer_PoC/
 │       └── health/             # 接続診断エンジン
 │           ├── __init__.py
 │           └── tester.py       # ConnectionTester (icepick config test)
-├── tests/                      # テストスイート (375+ tests, 100% PASS)
+├── tests/                      # テストスイート (400+ tests, 100% PASS)
 │   ├── conftest.py             # 共有フィクスチャ
 │   ├── test_parser.py
 │   ├── test_linter_engine.py
 │   ├── test_rules_*.py         # 各ルール別テスト
+│   ├── test_prescription_engine.py # 処方箋診断テスト
+│   ├── test_prescription_diff.py   # 処方箋ID選択Diffテスト
+│   ├── test_prescription_fix.py    # 処方箋インプレース適用テスト
 │   ├── test_patcher.py
 │   ├── test_subquery_to_cte.py
 │   ├── test_slicer.py
@@ -87,7 +95,10 @@ Snowflake_Query_Optimizer_PoC/
 │   ├── test_credentials.py
 │   ├── test_config.py
 │   ├── test_health.py
-│   ├── test_cli.py
+│   ├── test_cli.py             # verify / config CLIテスト
+│   ├── test_cli_diag.py        # icepick diag CLIテスト
+│   ├── test_cli_diff.py        # icepick diff CLIテスト
+│   ├── test_cli_fix.py         # icepick fix CLIテスト
 │   ├── test_agent_context.py
 │   └── test_agent_readiness.py
 ├── pyproject.toml              # パッケージ定義・ビルド設定 (uv / ruff / mypy)
@@ -103,7 +114,7 @@ Snowflake_Query_Optimizer_PoC/
 
 ## 🏗️ アーキテクチャの方針
 - **単一責任の原則 (SRP)**:
-  - 構文パース (`parser.py`)、診断 (`linter/`)、置換 (`patcher/`)、差分提示 (`diff/`)、等価性検証SQL生成 (`verifier/`)、認証管理 (`security/`)、接続診断 (`health/`) を完全に疎結合に分離する。
+  - 構文パース (`parser.py`)、診断 (`linter/`)、処方箋管理 (`prescription/`)、置換 (`patcher/`)、差分提示 (`diff/`)、等価性検証SQL生成 (`verifier/`)、認証管理 (`security/`)、接続診断 (`health/`) を完全に疎結合に分離する。
 - **純粋関数の徹底 (Purity & Determinism)**:
   - AST診断および置換ロジック、検証SQL生成は副作用を持たない決定論的純粋関数として実装し、外部I/O（ファイル書き込み、LLM API、認証ストア）は明示的なアダプタ層に集約する。
 - **Fail-Safe設計**:
