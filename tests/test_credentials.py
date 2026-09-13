@@ -9,10 +9,14 @@ import pytest
 from icepick.exceptions import AuthenticationError
 from icepick.security.credentials import (
     _native_read_wcm,
+    _native_read_wcm_pair,
     decode_credential_blob,
     format_actionable_error,
+    format_actionable_pair_error,
     read_wcm_credential,
+    read_wcm_credential_pair,
     resolve_credential,
+    resolve_credential_pair,
 )
 
 
@@ -191,3 +195,147 @@ class TestActionableErrorMessage:
         assert "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD" in msg
         assert "Get-Credential" in msg
         assert "cmdkey" in msg
+
+
+class TestReadWcmCredentialPair:
+    """Tests for read_wcm_credential_pair wrapper and mock boundary."""
+
+    def test_read_wcm_credential_pair_mock_hook(self) -> None:
+        """Verify that read_wcm_credential_pair invokes read_wcm_credential_pair_fn hook."""
+        with patch(
+            "icepick.security.credentials.read_wcm_credential_pair_fn",
+            return_value=("snowflake_user", "snowflake_pass"),
+        ) as mock_fn:
+            result = read_wcm_credential_pair("icepick:snowflake")
+            assert result == ("snowflake_user", "snowflake_pass")
+            mock_fn.assert_called_once_with("icepick:snowflake")
+
+    def test_native_read_wcm_pair_on_non_windows(self) -> None:
+        """Verify that _native_read_wcm_pair safely returns None on non-Windows platforms."""
+        with patch("sys.platform", "linux"):
+            result = _native_read_wcm_pair("icepick:snowflake")
+            assert result is None
+
+    def test_native_read_wcm_pair_handles_exception_gracefully(self) -> None:
+        """Verify that _native_read_wcm_pair safely returns None when Win32 API raises an exception."""
+        with patch("sys.platform", "win32"), patch("ctypes.windll", create=True) as mock_windll:
+            mock_windll.advapi32.CredReadW.side_effect = RuntimeError("API call failed")
+            result = _native_read_wcm_pair("icepick:snowflake")
+            assert result is None
+
+
+class TestResolveCredentialPair:
+    """Tests for strict priority pyramid in resolve_credential_pair."""
+
+    def test_resolve_credential_pair_debug_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify that DEBUG_ICEPICK_SNOWFLAKE_USER and DEBUG_ICEPICK_SNOWFLAKE_PASSWORD are used."""
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_USER", "debug_user")
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", "debug_password")
+
+        with patch(
+            "icepick.security.credentials.read_wcm_credential_pair",
+            return_value=("wcm_user", "wcm_pass"),
+        ):
+            user, password, source = resolve_credential_pair("snowflake")
+            assert user == "debug_user"
+            assert password == "debug_password"
+            assert "environment variables (DEBUG_ICEPICK_SNOWFLAKE_*)" in source
+
+    def test_resolve_credential_pair_wcm(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify that WCM is queried when debug environment variables are absent."""
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
+
+        with patch(
+            "icepick.security.credentials.read_wcm_credential_pair",
+            return_value=("wcm_user", "wcm_secret"),
+        ) as mock_wcm:
+            user, password, source = resolve_credential_pair("snowflake")
+            assert user == "wcm_user"
+            assert password == "wcm_secret"
+            assert "Windows Credential Manager (icepick:snowflake)" in source
+            mock_wcm.assert_called_once_with("icepick:snowflake")
+
+    def test_resolve_credential_pair_missing_raises_actionable_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify AuthenticationError with actionable recovery commands when credential pair is missing."""
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
+
+        with patch("icepick.security.credentials.read_wcm_credential_pair", return_value=None):
+            with pytest.raises(AuthenticationError) as exc_info:
+                resolve_credential_pair("snowflake")
+
+            error_msg = str(exc_info.value)
+            assert "[Authentication Error]" in error_msg
+            assert "snowflake" in error_msg
+            assert "Get-Credential" in error_msg
+            assert "cmdkey" in error_msg
+            assert "icepick:snowflake" in error_msg
+            assert "DEBUG_ICEPICK_SNOWFLAKE_USER" in error_msg
+            assert "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD" in error_msg
+            assert (
+                "cmdkey /generic:icepick:snowflake /user:$($cred.UserName) /pass:$($cred.GetNetworkCredential().Password)"
+                in error_msg
+            )
+
+    def test_resolve_credential_pair_partial_env_falls_back_to_wcm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify that if only one debug env var is set, it falls back to WCM."""
+        monkeypatch.setenv("DEBUG_ICEPICK_SNOWFLAKE_USER", "debug_user")
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
+
+        with patch(
+            "icepick.security.credentials.read_wcm_credential_pair",
+            return_value=("wcm_user", "wcm_secret"),
+        ):
+            user, password, source = resolve_credential_pair("snowflake")
+            assert user == "wcm_user"
+            assert password == "wcm_secret"
+            assert "Windows Credential Manager (icepick:snowflake)" in source
+
+    def test_resolve_credential_pair_ambient_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify that generic ambient environment variables (SNOWFLAKE_USER / SNOWFLAKE_PASSWORD) are ignored."""
+        monkeypatch.setenv("SNOWFLAKE_USER", "ambient_user")
+        monkeypatch.setenv("SNOWFLAKE_PASSWORD", "ambient_pass")
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_USER", raising=False)
+        monkeypatch.delenv("DEBUG_ICEPICK_SNOWFLAKE_PASSWORD", raising=False)
+
+        with (
+            patch("icepick.security.credentials.read_wcm_credential_pair", return_value=None),
+            pytest.raises(AuthenticationError),
+        ):
+            resolve_credential_pair("snowflake")
+
+
+class TestActionablePairErrorMessage:
+    """Unit tests for format_actionable_pair_error string formatting."""
+
+    def test_format_actionable_pair_error_contents(self) -> None:
+        """Verify format_actionable_pair_error contains all expected guidance sections."""
+        msg = format_actionable_pair_error("snowflake", app_prefix="icepick")
+        assert "[Authentication Error] Credential pair for 'snowflake' (username and password)" in msg
+        assert "icepick:snowflake" in msg
+        assert "DEBUG_ICEPICK_SNOWFLAKE_USER" in msg
+        assert "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD" in msg
+        assert "Get-Credential" in msg
+        assert "cmdkey" in msg
+        assert (
+            "cmdkey /generic:icepick:snowflake /user:$($cred.UserName) /pass:$($cred.GetNetworkCredential().Password)"
+            in msg
+        )
+
+
+def test_icepick_credentials_module_reexport() -> None:
+    """Verify that icepick.credentials re-exports all new pair functions."""
+    import icepick.credentials as creds
+
+    assert hasattr(creds, "read_wcm_credential_pair")
+    assert hasattr(creds, "read_wcm_credential_pair_fn")
+    assert hasattr(creds, "resolve_credential_pair")
+    assert hasattr(creds, "format_actionable_pair_error")
+

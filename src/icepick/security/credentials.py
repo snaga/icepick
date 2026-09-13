@@ -22,9 +22,13 @@ __all__ = [
     "AuthenticationError",
     "decode_credential_blob",
     "format_actionable_error",
+    "format_actionable_pair_error",
     "read_wcm_credential",
     "read_wcm_credential_fn",
+    "read_wcm_credential_pair",
+    "read_wcm_credential_pair_fn",
     "resolve_credential",
+    "resolve_credential_pair",
 ]
 
 
@@ -150,8 +154,61 @@ def _native_read_wcm(target: str) -> str | None:
         return None
 
 
+def _native_read_wcm_pair(target: str) -> tuple[str, str] | None:
+    """Read a generic credential pair (username and password) from Windows Credential Manager via advapi32.dll.
+
+    Args:
+        target: The target credential name (e.g., 'icepick:snowflake').
+
+    Returns:
+        tuple[str, str] of (UserName, decoded_password) if both exist and non-empty,
+        or None on failure / non-Windows.
+    """
+    if sys.platform != "win32":
+        return None
+
+    try:
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            return None
+        advapi32 = windll.advapi32
+        CredReadW = advapi32.CredReadW
+        CredFree = advapi32.CredFree
+
+        CredReadW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(_PCREDENTIALW),
+        ]
+        CredReadW.restype = wintypes.BOOL
+        CredFree.argtypes = [ctypes.c_void_p]
+        CredFree.restype = None
+
+        cred_ptr = _PCREDENTIALW()
+        success = CredReadW(target, _CRED_TYPE_GENERIC, 0, ctypes.byref(cred_ptr))
+        if not success or not cred_ptr:
+            return None
+
+        try:
+            cred = cred_ptr.contents
+            user_name = cred.UserName
+            blob_size = cred.CredentialBlobSize
+            if user_name and blob_size > 0 and cred.CredentialBlob:
+                raw_bytes = ctypes.string_at(cred.CredentialBlob, blob_size)
+                password = decode_credential_blob(raw_bytes)
+                if user_name.strip() and password:
+                    return (user_name.strip(), password)
+            return None
+        finally:
+            CredFree(cred_ptr)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # Pluggable hook for testing WCM without modifying native OS credentials
 read_wcm_credential_fn: Callable[[str], str | None] = _native_read_wcm
+read_wcm_credential_pair_fn: Callable[[str], tuple[str, str] | None] = _native_read_wcm_pair
 
 
 def read_wcm_credential(target: str) -> str | None:
@@ -167,6 +224,21 @@ def read_wcm_credential(target: str) -> str | None:
         The decoded secret string, or None if not found or unavailable.
     """
     return read_wcm_credential_fn(target)
+
+
+def read_wcm_credential_pair(target: str) -> tuple[str, str] | None:
+    """Read credential pair (username, password) from Windows Credential Manager.
+
+    Safe to call across all platforms. On non-Windows OS or if the target is
+    not found or incomplete, returns None without raising an exception.
+
+    Args:
+        target: The target credential name (e.g., 'icepick:snowflake').
+
+    Returns:
+        tuple[str, str] of (username, password), or None if not found or incomplete.
+    """
+    return read_wcm_credential_pair_fn(target)
 
 
 def format_actionable_error(key_name: str, app_prefix: str = "icepick") -> str:
@@ -194,6 +266,39 @@ def format_actionable_error(key_name: str, app_prefix: str = "icepick") -> str:
         f"  cmdkey /generic:{target} /user:any /pass:<your_key>\n\n"
         f"Or set the debug environment variable:\n"
         f'  $env:{env_var}="<your_key>"'
+    )
+
+
+def format_actionable_pair_error(
+    key_name: str = "snowflake",
+    app_prefix: str = "icepick",
+) -> str:
+    """Generate actionable error instructions for missing credential pair (user & password).
+
+    Provides copy-pasteable commands for both secure PowerShell registration
+    and debug environment variables.
+
+    Args:
+        key_name: Logical credential key identifier (default: 'snowflake').
+        app_prefix: Application namespace prefix (default: 'icepick').
+
+    Returns:
+        Actionable error string following REQ-E-4 and design 3.8.
+    """
+    target = f"{app_prefix}:{key_name.lower()}"
+    env_user = f"DEBUG_{app_prefix.upper()}_{key_name.upper()}_USER"
+    env_pass = f"DEBUG_{app_prefix.upper()}_{key_name.upper()}_PASSWORD"
+    return (
+        f"[Authentication Error] Credential pair for '{key_name}' (username and password) is invalid or not provided.\n"
+        f"To fix this, please register your credentials using Windows Credential Manager:\n"
+        f"  # Recommended (safe, masked input without leaving secrets in history):\n"
+        f'  $cred = Get-Credential -UserName "<your_user>" -Message "Enter {key_name} credentials"\n'
+        f"  cmdkey /generic:{target} /user:$($cred.UserName) /pass:$($cred.GetNetworkCredential().Password)\n\n"
+        f"  # Direct command:\n"
+        f"  cmdkey /generic:{target} /user:<your_user> /pass:<your_password>\n\n"
+        f"Or set the debug environment variables:\n"
+        f'  $env:{env_user}="<your_user>"\n'
+        f'  $env:{env_pass}="<your_password>"'
     )
 
 
@@ -234,3 +339,63 @@ def resolve_credential(
     # 3. Actionable error
     error_msg = format_actionable_error(key_name=key_name, app_prefix=app_prefix)
     raise AuthenticationError(error_msg, key_name=key_name)
+
+
+def resolve_credential_pair(
+    key_name: str = "snowflake",
+    app_prefix: str = "icepick",
+) -> tuple[str, str, str]:
+    """Resolve a credential pair (username, password) following the strict priority pyramid.
+
+    Priority Pyramid:
+      1. Debug / CI-only environment variables:
+         DEBUG_<APP_PREFIX>_<KEY_NAME>_USER and DEBUG_<APP_PREFIX>_<KEY_NAME>_PASSWORD
+      2. Windows Credential Manager: <app_prefix>:<key_name> (UserName + CredentialBlob)
+      (Generic ambient variables such as SNOWFLAKE_USER or SNOWFLAKE_PASSWORD
+       are intentionally ignored to avoid accidental secret leak and ambient contamination.)
+
+    Args:
+        key_name: Logical credential key name (default: 'snowflake').
+        app_prefix: Application prefix for target namespace and env vars (default: 'icepick').
+
+    Returns:
+        tuple[str, str, str]: (username, password, source_description)
+
+    Raises:
+        AuthenticationError: If the credential pair cannot be resolved from any source.
+    """
+    prefix_upper = app_prefix.upper()
+    key_upper = key_name.upper()
+    env_user_var = f"DEBUG_{prefix_upper}_{key_upper}_USER"
+    env_pass_var = f"DEBUG_{prefix_upper}_{key_upper}_PASSWORD"
+
+    env_user = os.environ.get(env_user_var)
+    env_pass = os.environ.get(env_pass_var)
+
+    if env_user is not None and env_pass is not None:
+        user_clean = env_user.strip()
+        pass_clean = env_pass.strip()
+        if user_clean and pass_clean:
+            return (
+                user_clean,
+                pass_clean,
+                f"environment variables (DEBUG_{prefix_upper}_{key_upper}_*)",
+            )
+
+    # 2. Windows Credential Manager
+    target = f"{app_prefix}:{key_name.lower()}"
+    pair = read_wcm_credential_pair(target)
+    if pair is not None:
+        user_clean = pair[0].strip()
+        pass_clean = pair[1].strip()
+        if user_clean and pass_clean:
+            return (
+                user_clean,
+                pass_clean,
+                f"Windows Credential Manager ({target})",
+            )
+
+    # 3. Actionable error
+    error_msg = format_actionable_pair_error(key_name=key_name, app_prefix=app_prefix)
+    raise AuthenticationError(error_msg, key_name=key_name)
+
