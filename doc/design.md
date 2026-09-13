@@ -133,8 +133,13 @@ class OptimizationResult:
     - エンドポイント: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
     - 認証: リクエストヘッダー `x-goog-api-key: {GEMINI_API_KEY}`
   - **Vertex AI モード**:
-    - エンドポイント: `https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/google/models/{model}:generateContent`
-    - 認証: `google-auth` から取得した OAuth2 Bearer トークンを `Authorization: Bearer {token}` に付与。
+    - エンドポイント:
+      - `location == "global"` の場合: `https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google/models/{model}:generateContent`
+      - リージョン指定の場合: `https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
+    - 認証:
+      - 第 1 候補: `google-auth` による ADC (Application Default Credentials) トークン取得
+      - 第 2 候補 (フォールバック): `gcloud.cmd auth application-default print-access-token`（Windows）または `gcloud` のサブプロセス実行により、社内環境のサービスアカウント偽装が設定された gcloud CLI から直接トークンを取得
+      - 取得した OAuth2 Bearer トークンを `Authorization: Bearer {token}` に付与。
   - レスポンスから Markdown コードブロック（```sql ... ```）を抽出し、`sqlglot.parse_one(llm_sql, read="snowflake")` で即座に構文検証。構文OKなら新しいASTノードを返し、構文エラー時は元のASTノードを維持して安全にフォールバック。
 
 ### 3.4 `DiffFormatter` (`icepick/diff/`)
@@ -230,8 +235,29 @@ class OptimizationResult:
 - 対応要件: E-8
 - **テスト設計 (`tests/test_agent_readiness.py`)**:
   1. **非TTYハング防止テスト**: `stdin` を `io.StringIO` やパイプ模倣オブジェクトに差し替え、プロンプト待ちでブロックせずに終了することを確認。
-  2. **構造化出力テスト**: 全サブコマンド（`check`, `rewrite`, `patch`, `feedback`, `agent-context`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
+  2. **構造化出力テスト**: 全サブコマンド（`check`, `rewrite`, `patch`, `feedback`, `agent-context`, `verify`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
   3. **Actionable Error検証**: 認証未設定時および不正引数指定時に、有効な enum 一覧および復旧コマンド例が出力に含まれていることを検証。
+
+### 3.10 `ConfigResolver` & 実行時コンフィグ・フィードバック (`icepick/config.py` または `cli.py`)
+- 対応要件: E-9, C-4
+- **優先順位ピラミッド (Configuration Precedence)**:
+  1. **CLI オプション**: `--provider` (`-p`), `--model` (`-m`), `--timeout` (`-t`), `--dialect` (`-d`) 等
+  2. **環境変数**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `SNOWFLAKE_*` 等
+  3. **設定ファイル**: `--config` 指定ファイル、または暗黙の `.icepick.toml` / `icepick.json`
+  4. **セキュア認証情報**: Windows 資格情報マネージャー（WCM: `icepick:*`）
+  5. **組み込みデフォルト値**: `llm_provider="gemini"`, `llm_model="gemini-3.8-flash"`, `location="us-central1"` 等
+- **IPO 記述**:
+  - **Input**: CLI 引数、明示的/暗黙の設定ファイルパス、環境変数辞書、WCM
+  - **Processing**:
+    1. 各設定項目について、優先順位に従い上書きマージを実行。
+    2. 各項目の値とともに、解決されたソース（`cli_option`, `environment_variable`, `config_file`, `credential_manager`, `default`）を記録した `RuntimeConfigSummary` を構築。
+    3. `--agentic` や `--verify-loop`、`verify` 実行時に、アクティブな設定とソースをターミナルに表示。
+    4. `--json` 指定時は出力 JSON のルート要素に `runtime_config` オブジェクトを含めてシリアライズ。
+  - **Output**:
+    - マージ済み `Config` インスタンス
+    - `RuntimeConfigSummary`（キー、値、ソース、マスク済み機密情報）
+- **確認コマンド (`icepick config show`)**:
+  - 現在解決されている全設定項目（LLM設定、Snowflake設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。
 
 ## 4. シーケンス図（対話型リファクタリングフロー）
 
