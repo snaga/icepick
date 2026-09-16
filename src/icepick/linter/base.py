@@ -38,7 +38,7 @@ class DiagnosticIssue:
         line_number: 1-indexed line number where the issue was detected, if available.
         suggested_replacement: Optional proposed replacement AST node.
             If None and requires_llm is False, indicates recommendation to remove (pop) target_node.
-        requires_llm: True if resolving this issue requires LLM rewriting.
+        requires_llm: True if resolving this issue requires external LLM / agent rewriting.
     """
 
     rule_id: str
@@ -66,12 +66,12 @@ class DiagnosticIssue:
 
     @property
     def is_deletable(self) -> bool:
-        """Whether this issue recommends node removal (pop) without LLM intervention."""
+        """Whether this issue recommends node removal (pop) without external LLM / agent intervention."""
         return self.suggested_replacement is None and not self.requires_llm
 
     @property
     def can_auto_fix(self) -> bool:
-        """Whether this issue can be fixed deterministically without LLM assistance."""
+        """Whether this issue can be fixed deterministically without external LLM assistance."""
         return not self.requires_llm
 
     def to_dict(self) -> dict[str, Any]:

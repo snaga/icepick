@@ -16,7 +16,7 @@ def get_agent_context() -> dict[str, Any]:
 
     Returns:
         dict[str, Any]: A complete specification of commands, rules,
-            environment variables, and credentials.
+            and environment variables.
     """
     return {
         "name": "icepick",
@@ -241,41 +241,6 @@ def get_agent_context() -> dict[str, Any]:
                             },
                         },
                     },
-                    "test": {
-                        "description": "Test connectivity and authentication for LLM services (Gemini/Vertex).",
-                        "arguments": {},
-                        "options": {
-                            "--provider": {
-                                "flag": "-p",
-                                "type": "str",
-                                "default": None,
-                                "choices": ["gemini", "vertex"],
-                                "description": "LLM provider ('gemini' or 'vertex').",
-                            },
-                            "--model": {
-                                "flag": "-m",
-                                "type": "str",
-                                "default": None,
-                                "description": "LLM model identifier.",
-                            },
-                            "--timeout": {
-                                "type": "float",
-                                "default": 10.0,
-                                "description": "Timeout in seconds for connection check (default: 10.0).",
-                            },
-                            "--config": {
-                                "flag": "-c",
-                                "type": "Path",
-                                "default": None,
-                                "description": "Path to configuration file.",
-                            },
-                            "--json": {
-                                "type": "bool",
-                                "default": False,
-                                "description": "Output health report as structured JSON.",
-                            },
-                        },
-                    },
                 },
             },
         },
@@ -331,16 +296,17 @@ def get_agent_context() -> dict[str, Any]:
             },
         ],
         "environment_variables": {
-            "DEBUG_ICEPICK_GEMINI_API_KEY": {
-                "description": "Temporary debug/CI override for Google Gemini LLM API key. Never use in production.",
-                "credential_target": "icepick:gemini_api_key",
+            "ICEPICK_DIALECT": {
+                "description": "SQL dialect for parsing (e.g., 'snowflake', 'postgres'). Default: 'snowflake'.",
                 "required": False,
             },
-        },
-        "credentials": {
-            "icepick:gemini_api_key": {
-                "description": "Windows Credential Manager target for Google Gemini LLM API key.",
-                "cmdkey_example": "cmdkey /generic:icepick:gemini_api_key /user:icepick /pass:<API_KEY>",
+            "ICEPICK_ENABLED_RULES": {
+                "description": "Comma-separated list of rule IDs to enable (e.g., 'SNOW-001,SNOW-003').",
+                "required": False,
+            },
+            "ICEPICK_DISABLED_RULES": {
+                "description": "Comma-separated list of rule IDs to disable.",
+                "required": False,
             },
         },
     }

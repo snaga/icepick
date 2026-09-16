@@ -16,9 +16,8 @@ from icepick.config import (
     RuntimeConfigSummary,
     mask_sensitive,
 )
-from icepick.exceptions import AuthenticationError, IcepickError, ParseError
+from icepick.exceptions import IcepickError, ParseError
 from icepick.linter import BaseRule, DiagnosticIssue, LinterEngine, Severity
-from icepick.llm import ContextSlicer, LLMClient, SliceContext
 from icepick.parser import SQLParser, parse_snowflake_sql
 from icepick.patcher import ASTPatcher, SubqueryToCTE
 from icepick.prescription import (
@@ -36,16 +35,13 @@ from icepick.verifier import (
 
 __all__ = [
     "ASTPatcher",
-    "AuthenticationError",
     "BaseRule",
     "Config",
     "ConfigResolver",
     "ConfigSource",
-    "ContextSlicer",
     "DiagnosticIssue",
     "EquivalenceVerifier",
     "IcepickError",
-    "LLMClient",
     "LinterEngine",
     "OptimizerConfig",
     "ParseError",
@@ -58,7 +54,6 @@ __all__ = [
     "RuntimeConfigSummary",
     "SQLParser",
     "Severity",
-    "SliceContext",
     "SubqueryToCTE",
     "VerificationResult",
     "__version__",

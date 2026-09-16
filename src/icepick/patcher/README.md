@@ -17,7 +17,7 @@
   - 外部ライブラリ: `sqlglot`
   - 内部モジュール: `icepick.linter.base` (`DiagnosticIssue` のみ)
 - **禁止される依存**:
-  - `icepick.cli`（CLI層）、`icepick.llm`（LLMクライアント）、`icepick.verifier`（等価性検証）に直接依存してはならない。
+  - `icepick.cli`（CLI層）、`icepick.verifier`（等価性検証）、外部ネットワーク通信ライブラリに直接依存してはならない。
 
 ## 3. Fail-Safe 原則 (Fail-Safe Principle)
 - **非破壊フォールバック保証**:

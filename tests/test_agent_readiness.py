@@ -12,16 +12,14 @@ import re
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 from typer.testing import CliRunner
 
 from icepick import __version__
 from icepick.cli import VALID_DIALECTS, app
 from icepick.diff import normalize_sql
 from icepick.feedback import VALID_CATEGORIES
-from icepick.health import ConnectionHealthReport, ServiceTestResult
 
 runner = CliRunner()
 
@@ -143,41 +141,14 @@ class TestAgentReadiness:
         assert "commands" in data_ctx
         assert "rules" in data_ctx
         assert "environment_variables" in data_ctx
-        assert "credentials" in data_ctx
 
         # 6. config show --json
         res_cfg = runner.invoke(app, ["config", "show", "--json"])
         assert res_cfg.exit_code == 0
         data_cfg = _assert_valid_json_and_no_ansi(res_cfg.stdout)
         assert isinstance(data_cfg, dict)
-        assert "llm_provider" in data_cfg
-        assert "llm_model" in data_cfg
         assert "dialect" in data_cfg
-        assert data_cfg["llm_provider"]["value"] in ("gemini", "vertex")
-        assert "source" in data_cfg["llm_provider"]
-
-        # 7. config test --json
-        mock_report = ConnectionHealthReport(
-            results={
-                "llm": ServiceTestResult(
-                    service="llm",
-                    success=True,
-                    duration_ms=10.0,
-                    message="Connected.",
-                )
-            }
-        )
-        with patch("icepick.cli.ConnectionTester") as mock_tester_cls:
-            mock_tester = MagicMock()
-            mock_tester.test_all.return_value = mock_report
-            mock_tester_cls.return_value = mock_tester
-
-            res_test = runner.invoke(app, ["config", "test", "--json"])
-            assert res_test.exit_code == 0
-            data_test = _assert_valid_json_and_no_ansi(res_test.stdout)
-            assert isinstance(data_test, dict)
-            assert data_test["all_passed"] is True
-            assert "llm" in data_test["results"]
+        assert "source" in data_cfg["dialect"]
 
     def test_readiness_all_commands_help_succeeds(self) -> None:
         """Verify that all commands and subcommands produce valid help messages and exit 0."""
@@ -191,7 +162,6 @@ class TestAgentReadiness:
             ["agent-context", "--help"],
             ["config", "--help"],
             ["config", "show", "--help"],
-            ["config", "test", "--help"],
         ]
         for cmd in commands_to_test:
             result = runner.invoke(app, cmd)
@@ -201,48 +171,6 @@ class TestAgentReadiness:
                 or "Options" in result.stdout
                 or "Commands" in result.stdout
             )
-
-    def test_readiness_actionable_error_on_missing_credentials(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Verify that LLM connection test without credentials exits 1 with actionable recovery commands."""
-        # Ensure no environment variables or WCM credentials exist
-        monkeypatch.delenv("DEBUG_ICEPICK_GEMINI_API_KEY", raising=False)
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-
-        monkeypatch.setattr(
-            "icepick.security.credentials.read_wcm_credential_fn",
-            lambda target: None,
-        )
-        monkeypatch.setattr(
-            "icepick.security.credentials.read_wcm_credential",
-            lambda target: None,
-        )
-        monkeypatch.setattr(
-            "icepick.credentials.read_wcm_credential_fn",
-            lambda target: None,
-        )
-        monkeypatch.setattr(
-            "icepick.credentials.read_wcm_credential",
-            lambda target: None,
-        )
-        result = runner.invoke(app, ["config", "test"])
-
-        # Must exit with code 1 (Authentication Error)
-        assert result.exit_code == 1
-
-        # Actionable instructions must be present in output
-        combined_text = result.output + (result.stderr or "")
-        assert "FAIL" in combined_text or "Error" in combined_text
-        assert "llm" in combined_text.lower()
-
-        # Verify PowerShell masked credential guidance
-        assert "cmdkey /generic:icepick:gemini_api_key" in combined_text
-
-        # Verify debug environment variable fallback guidance
-        assert "$env:DEBUG_ICEPICK_GEMINI_API_KEY=" in combined_text
 
     def test_readiness_enumerated_error_on_invalid_arguments(self, tmp_path: Path) -> None:
         """Verify that invalid arguments yield exit code 1 and display accepted enum choices in stderr."""

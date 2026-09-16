@@ -1,7 +1,7 @@
 """Configuration management for Icepick.
 
 Defines the configuration schema, default values, cascading resolution
-across CLI, environment variables, configuration files, and secure keyrings,
+across CLI, environment variables, and configuration files,
 along with runtime provenance tracking.
 """
 
@@ -27,7 +27,6 @@ class ConfigSource(str, Enum):
     CLI = "cli"
     ENV = "env"
     FILE = "file"
-    KEYRING = "keyring"
     DEFAULT = "default"
 
 
@@ -131,14 +130,6 @@ class Config:
         show_diff: Whether to output colored Unified Diff in terminal.
         write_in_place: Whether to overwrite the target SQL file directly.
         output_patch: Optional path to output the generated Unified Diff as a .patch file.
-        llm_enabled: Whether to allow LLM-based local AST rewriting (e.g. for correlated subqueries).
-        llm_provider: LLM service provider ("gemini" or "vertex").
-        llm_model: Model name to invoke for rewrites.
-        gemini_api_key: API key for Google AI Studio Gemini API (or loaded via GEMINI_API_KEY env).
-        gcp_project: GCP project ID when using Vertex AI.
-        gcp_location: GCP location/region when using Vertex AI.
-        llm_options: Generic provider-specific options passed to the pluggable LLM provider.
-            Supports arbitrary key-value pairs from [llm.options] TOML table or llm_options JSON key.
     """
 
     dialect: str = "snowflake"
@@ -148,21 +139,12 @@ class Config:
     show_diff: bool = True
     write_in_place: bool = False
     output_patch: str | None = None
-    llm_enabled: bool = False
-    llm_provider: str = "gemini"
-    llm_model: str = "gemini-3.8-flash"
-    gemini_api_key: str | None = None
-    gcp_project: str | None = None
-    gcp_location: str | None = None
-    llm_options: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize rule lists and perform basic validation."""
         self.dialect = self.dialect.strip().lower()
         self.enabled_rules = [r.strip().upper() for r in self.enabled_rules if r.strip()]
         self.disabled_rules = [r.strip().upper() for r in self.disabled_rules if r.strip()]
-        if not isinstance(self.llm_options, dict):
-            self.llm_options = {}
         self.validate()
 
     def validate(self) -> None:
@@ -177,12 +159,6 @@ class Config:
         conflict = set(self.enabled_rules) & set(self.disabled_rules)
         if conflict:
             raise ValueError(f"Rules cannot be both enabled and disabled: {sorted(conflict)}")
-
-        valid_providers = {"gemini", "vertex"}
-        if self.llm_provider not in valid_providers:
-            raise ValueError(
-                f"Unsupported llm_provider '{self.llm_provider}'. Expected one of {valid_providers}."
-            )
 
     def is_rule_enabled(self, rule_id: str) -> bool:
         """Determine whether a specific rule should be executed.
@@ -235,12 +211,6 @@ _ENV_VAR_MAPPING: dict[str, list[str]] = {
     "show_diff": ["ICEPICK_SHOW_DIFF"],
     "write_in_place": ["ICEPICK_WRITE_IN_PLACE"],
     "output_patch": ["ICEPICK_OUTPUT_PATCH"],
-    "llm_enabled": ["ICEPICK_LLM_ENABLED"],
-    "llm_provider": ["ICEPICK_LLM_PROVIDER"],
-    "llm_model": ["ICEPICK_LLM_MODEL"],
-    "gemini_api_key": ["DEBUG_ICEPICK_GEMINI_API_KEY"],
-    "gcp_project": ["GCP_PROJECT", "GOOGLE_CLOUD_PROJECT"],
-    "gcp_location": ["GCP_LOCATION", "GOOGLE_CLOUD_REGION"],
 }
 
 
@@ -248,17 +218,15 @@ class ConfigResolver:
     """Cascading configuration resolver with provenance tracking.
 
     Resolves configuration values across the priority pyramid:
-        CLI > ENV > FILE > KEYRING > DEFAULT
+        CLI > ENV > FILE > DEFAULT
     """
-
-    SECRET_KEYS: frozenset[str] = frozenset({"gemini_api_key"})
 
     def __init__(
         self,
         cli_args: dict[str, Any] | None = None,
         env_vars: dict[str, str] | None = None,
         config_file: Path | str | None = None,
-        use_keyring: bool = True,
+        use_keyring: bool = False,
     ) -> None:
         """Initialize the ConfigResolver.
 
@@ -266,12 +234,13 @@ class ConfigResolver:
             cli_args: Command-line arguments mapping.
             env_vars: Environment variables dictionary (defaults to os.environ).
             config_file: Explicit path to configuration file (.toml or .json).
-            use_keyring: Whether to resolve secrets from secure credentials (WCM / Keyring).
+            use_keyring: Ignored. Kept for backward-compatibility only. No keyring is used.
         """
         self.cli_args: dict[str, Any] = cli_args or {}
         self.env_vars: dict[str, str] | None = env_vars
         self.config_file: Path | None = Path(config_file) if config_file is not None else None
-        self.use_keyring: bool = use_keyring
+        # use_keyring parameter is accepted but ignored — ADR-0007 mandates zero-credential model.
+        _ = use_keyring
 
     def _load_config_file(self) -> dict[str, Any]:
         """Load configuration from file if specified or found in CWD.
@@ -315,29 +284,7 @@ class ConfigResolver:
         if not isinstance(config_data, dict):
             return {}
 
-        # Strictly exclude secrets from config files to prevent accidental leakage
-        result = {k: v for k, v in config_data.items() if k not in self.SECRET_KEYS}
-
-        # Merge [llm.options] TOML sub-table (or "llm_options" flat key in JSON) into llm_options.
-        # Priority: explicit "llm_options" dict key first, then nested [llm][options] sub-table.
-        merged_llm_options: dict[str, Any] = {}
-
-        # TOML: [llm.options] appears as data["llm"]["options"] inside config_data
-        llm_section = config_data.get("llm")
-        if isinstance(llm_section, dict):
-            opts = llm_section.get("options")
-            if isinstance(opts, dict):
-                merged_llm_options.update(opts)
-
-        # Flat key "llm_options" (e.g. JSON: {"llm_options": {...}}) overrides nested [llm.options]
-        flat_opts = result.get("llm_options")
-        if isinstance(flat_opts, dict):
-            merged_llm_options.update(flat_opts)
-
-        if merged_llm_options:
-            result["llm_options"] = merged_llm_options
-
-        return result
+        return dict(config_data)
 
     def _get_env_value(self, key: str, env: dict[str, str]) -> Any:
         """Extract and parse value for a key from environment variables mapping."""
@@ -352,7 +299,7 @@ class ConfigResolver:
             return None
 
         # Parse boolean values
-        if key in {"interactive", "show_diff", "write_in_place", "llm_enabled"}:
+        if key in {"interactive", "show_diff", "write_in_place"}:
             return raw_val.strip().lower() in ("1", "true", "yes", "on")
 
         # Parse comma-separated lists
@@ -360,19 +307,6 @@ class ConfigResolver:
             return [item.strip() for item in raw_val.split(",") if item.strip()]
 
         return raw_val.strip()
-
-    def _get_keyring_value(self, key: str) -> str | None:
-        """Resolve a sensitive credential from Keyring / WCM."""
-        if not self.use_keyring or key not in self.SECRET_KEYS:
-            return None
-
-        try:
-            from icepick.credentials import read_wcm_credential
-
-            target = f"icepick:{key.lower()}"
-            return read_wcm_credential(target)
-        except Exception:  # noqa: BLE001
-            return None
 
     def resolve(self) -> tuple[Config, RuntimeConfigSummary]:
         """Resolve all configuration settings according to the priority pyramid.
@@ -388,7 +322,6 @@ class ConfigResolver:
 
         for f in fields(Config):
             key = f.name
-            is_secret = key in self.SECRET_KEYS
             val: Any = None
             src: ConfigSource
 
@@ -402,17 +335,12 @@ class ConfigResolver:
                 val = env_val
                 src = ConfigSource.ENV
 
-            # 3. Configuration file (Strictly ignore secret keys to avoid plaintext leakage)
-            elif key not in self.SECRET_KEYS and key in file_cfg and file_cfg[key] is not None:
+            # 3. Configuration file
+            elif key in file_cfg and file_cfg[key] is not None:
                 val = file_cfg[key]
                 src = ConfigSource.FILE
 
-            # 4. Keyring / Windows Credential Manager
-            elif (keyring_val := self._get_keyring_value(key)) is not None:
-                val = keyring_val
-                src = ConfigSource.KEYRING
-
-            # 5. Embedded default
+            # 4. Embedded default
             else:
                 if f.default is not dataclasses.MISSING:
                     val = f.default
@@ -427,7 +355,7 @@ class ConfigResolver:
                 key=key,
                 value=val,
                 source=src,
-                is_secret=is_secret,
+                is_secret=False,
             )
 
         config = Config(**config_kwargs)

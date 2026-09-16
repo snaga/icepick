@@ -27,7 +27,6 @@ class TestAgentContextUnit:
             "commands",
             "rules",
             "environment_variables",
-            "credentials",
         }
         assert required_keys.issubset(ctx.keys())
         assert ctx["name"] == "icepick"
@@ -113,18 +112,7 @@ class TestAgentContextUnit:
         show_sub = config_cmd["subcommands"]["show"]
         assert "--config" in show_sub["options"]
         assert "--json" in show_sub["options"]
-
-        assert "test" in config_cmd["subcommands"]
-        test_sub = config_cmd["subcommands"]["test"]
-        assert "--target" not in test_sub["options"]
-        assert "--llm" not in test_sub["options"]
-        assert "--snowflake" not in test_sub["options"]
-        assert "--provider" in test_sub["options"]
-        assert test_sub["options"]["--provider"]["choices"] == ["gemini", "vertex"]
-        assert "--model" in test_sub["options"]
-        assert "--timeout" in test_sub["options"]
-        assert "--config" in test_sub["options"]
-        assert "--json" in test_sub["options"]
+        assert "test" not in config_cmd["subcommands"]
 
         # Check options for 'verify'
         verify_opts = commands["verify"]["options"]
@@ -207,29 +195,15 @@ class TestAgentContextUnit:
         assert snow_007["can_auto_fix"] is True
         assert snow_007["severity"] == "MEDIUM"
 
-    def test_environment_variables_debug_only(self) -> None:
-        """Verify that environment variables only expose DEBUG_ICEPICK_ prefixed vars."""
+    def test_environment_variables_schema(self) -> None:
+        """Verify that environment variables expose supported ICEPICK_ config vars."""
         ctx = get_agent_context()
         env_vars = ctx["environment_variables"]
 
-        assert "DEBUG_ICEPICK_GEMINI_API_KEY" in env_vars
-        assert "DEBUG_ICEPICK_SNOWFLAKE_PASSWORD" not in env_vars
-
-        # Ensure no generic/broad environment variables are included
-        for var_name in env_vars:
-            assert var_name.startswith("DEBUG_ICEPICK_")
-
-    def test_credentials_schema(self) -> None:
-        """Verify credential targets and command examples."""
-        ctx = get_agent_context()
-        creds = ctx["credentials"]
-
-        assert "icepick:gemini_api_key" in creds
-        assert "icepick:snowflake_password" not in creds
-        for cred_target, cred_info in creds.items():
-            assert cred_target.startswith("icepick:")
-            assert "description" in cred_info
-            assert "cmdkey_example" in cred_info
+        assert "ICEPICK_DIALECT" in env_vars
+        assert "ICEPICK_ENABLED_RULES" in env_vars
+        assert "ICEPICK_DISABLED_RULES" in env_vars
+        assert "DEBUG_ICEPICK_GEMINI_API_KEY" not in env_vars
 
 
 class TestAgentContextCli:
@@ -246,7 +220,6 @@ class TestAgentContextCli:
         assert "commands" in parsed
         assert "rules" in parsed
         assert "environment_variables" in parsed
-        assert "credentials" in parsed
 
     def test_agent_context_with_json_flag(self) -> None:
         """Verify agent-context --json exits with 0 and outputs valid JSON."""

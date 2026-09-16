@@ -23,7 +23,6 @@ from icepick.config import Config, ConfigResolver, RuntimeConfigSummary
 from icepick.diff import render_diff
 from icepick.exceptions import ParseError
 from icepick.feedback import FeedbackRecorder
-from icepick.health import ConnectionTester
 from icepick.linter.base import Severity
 from icepick.linter.engine import LinterEngine
 from icepick.linter.rules import (
@@ -112,7 +111,7 @@ def _load_config(
     config_path: Path | None = None,
     cli_args: dict[str, Any] | None = None,
 ) -> tuple[Config, RuntimeConfigSummary]:
-    """Load and resolve Config cascading across CLI, Env, File, Keyring, and Defaults."""
+    """Load and resolve Config cascading across CLI, Env, File, and Defaults."""
     resolver = ConfigResolver(
         cli_args=cli_args,
         config_file=config_path,
@@ -703,104 +702,4 @@ def config_show(
         table.add_row(key, val, item.source.value, is_sec)
 
     console.print(table)
-    raise typer.Exit(code=0)
-
-
-@config_app.command("test")
-def test_config(
-    provider: str | None = typer.Option(
-        None,
-        "--provider",
-        "-p",
-        help="LLM provider ('gemini' or 'vertex').",
-    ),
-    model: str | None = typer.Option(
-        None,
-        "--model",
-        "-m",
-        help="LLM model identifier.",
-    ),
-    timeout: float = typer.Option(
-        10.0,
-        "--timeout",
-        help="Timeout in seconds for connection check.",
-    ),
-    config: Path | None = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to configuration file.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help="Output health report as structured JSON.",
-    ),
-) -> None:
-    """Test connectivity, latency, and authentication for LLM services."""
-    cli_args: dict[str, Any] = {}
-    if provider is not None:
-        cli_args["llm_provider"] = provider
-    if model is not None:
-        cli_args["llm_model"] = model
-
-    try:
-        cfg, _ = _load_config(config, cli_args=cli_args)
-    except (ValueError, FileNotFoundError) as exc:
-        err_console.print(f"[bold red]Configuration Error:[/bold red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    tester = ConnectionTester()
-    report = tester.test_all(cfg=cfg, timeout=timeout)
-
-    if json_output:
-        typer.echo(json.dumps(report.to_dict(), indent=2))
-        if not report.all_passed:
-            raise typer.Exit(code=1)
-        raise typer.Exit(code=0)
-
-    # Render summary table for interactive terminal output
-    table = Table(
-        title="Icepick Connection Health Check",
-        show_header=True,
-        header_style="bold cyan",
-    )
-    table.add_column("Service", style="bold")
-    table.add_column("Status", justify="center")
-    table.add_column("Latency", justify="right")
-    table.add_column("Details")
-
-    for service, result in report.results.items():
-        status_style = (
-            "[bold green]PASS[/bold green]" if result.success else "[bold red]FAIL[/bold red]"
-        )
-        latency_str = f"{result.duration_ms:.1f}ms"
-        details_items = [
-            f"{k}={v}"
-            for k, v in result.details.items()
-            if v is not None and str(v) != "" and k != "response_snippet"
-        ]
-        details_str = ", ".join(details_items) if details_items else "-"
-        table.add_row(service.upper(), status_style, latency_str, details_str)
-
-    console.print(table)
-
-    # If any service failed, output actionable advice panel
-    for result in report.results.values():
-        if not result.success:
-            advice_content = f"[bold red]Error:[/bold red] {result.message}"
-            if result.actionable_advice:
-                advice_content += (
-                    f"\n\n[yellow]Actionable Advice:[/yellow]\n{result.actionable_advice}"
-                )
-            console.print(
-                Panel(
-                    advice_content,
-                    title=f"Actionable Advice: {result.service.upper()}",
-                    border_style="red",
-                )
-            )
-
-    if not report.all_passed:
-        raise typer.Exit(code=1)
     raise typer.Exit(code=0)

@@ -322,82 +322,48 @@ icepick feedback "CTE抽出の順序が直感的でわかりやすい" --categor
 ```bash
 icepick diag models/batch_mart.sql --json
 icepick config show --json
-icepick config test --json
 icepick feedback "CTE抽出の順序が直感的でわかりやすい" --category idea --json
 ```
 
 ---
 
-## 🔐 セキュアな認証設定 (Authentication)
+## 🔒 完全ゼロ・クレデンシャル ＆ ゼロ・ネットワーク設計 (Zero-Credential Architecture)
 
 > [!NOTE]
-> **ゼロ・クレデンシャル設計 (ADR-0004)**:
-> Icepick は Snowflake データベースへの直接接続・実行を行わないため、**Snowflake のアカウント情報・ユーザー名・パスワードなどの認証情報は一切不要**です。すべての構文解析、静的診断、AST リライト、および等価性検証 SQL（`verify`）の生成はローカル環境で完結します。
+> **完全ゼロ・クレデンシャル ＆ 完全オフライン動作 (ADR-0007)**:
+> Icepick は内部での外部 LLM API 呼び出しやネットワーク通信、Snowflake への直接接続を一切行いません。
+> - **外部 API キー不要**: Gemini / Vertex AI 等の API キーや認証情報は一切必要ありません。
+> - **Snowflake 認証情報不要**: Snowflake のアカウント・ユーザ名・パスワード等は一切不要です。
+> - **ゼロ・ネットワーク依存**: すべての静的診断、Unified Diff 生成、インプレース適用、検証 SQL 生成はローカル環境で 100% 決定論的かつオフラインで完結します。
 
-LLM による高度な外科手術的リライト（`--agentic`）を利用する場合にのみ、LLM プロバイダの認証設定が必要となります。
-API キーなどの機密情報を安全に保護し、シェル履歴（`ConsoleHost_history.txt`）への平文残存や GitHub への誤コミットを防ぐため、Icepick は **Windows 資格情報マネージャー (Windows Credential Manager: WCM)** を標準の認証ストレージとして採用しています。
+### 🤝 3 層連携アーキテクチャ (3-Tier Synergy)
 
-> [!IMPORTANT]
-> **環境汚染防止のための設計方針**:
-> 他のツールや親プロセスからの偶発的なトークン混入・情報漏洩を防ぐため、**一般的な環境変数（`GEMINI_API_KEY` 等）は意図的に探索対象から除外** されています。
+Icepick は、コード探索ツール `ast-digger` および外部の AI コーディングエージェント（Claude Code, Antigravity, GitHub Copilot 等）と組み合わせることで最大のパフォーマンスを発揮します。
 
-### 認証解決の優先順位 (Priority Pyramid)
-1. **一時デバッグ / CI・CD 専用環境変数** (`DEBUG_ICEPICK_GEMINI_API_KEY`)
-2. **Windows 資格情報マネージャー** (`icepick:gemini_api_key`)
-3. **自己修正エラー (Actionable Error)**
-
----
-
-### 推奨設定手順 (PowerShell マスク入力)
-シェル履歴に秘密情報を一切残さないため、PowerShell の対話型マスク入力を推奨します。
-
-#### Gemini API キーの登録 (LLM 局所リライト用)
-```powershell
-$cred = Get-Credential -UserName "any" -Message "Gemini API Key をパスワード欄に入力してください"
-cmdkey /generic:icepick:gemini_api_key /user:any /pass:$($cred.GetNetworkCredential().Password)
-```
-*(※ Vertex AI を利用する場合は、Google Cloud ADC `gcloud auth application-default login` が自動的に使用されるため、キーの登録は不要です)*
-
----
-
-### 直接登録する場合 (コマンドプロンプト / PowerShell)
-```cmd
-# Gemini API キー
-cmdkey /generic:icepick:gemini_api_key /user:any /pass:<your_gemini_api_key>
-```
-*(※ `cmdkey` 特有の UTF-16LE / Null byte トラップは Icepick 内部で自動検知・安全にデコードされます)*
-
----
-
-### 登録内容の確認・削除
-```cmd
-# 一覧確認
-cmdkey /list:icepick:*
-
-# 削除
-cmdkey /delete:icepick:gemini_api_key
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                        AI コーディングエージェント                      │
+│            (高度な推論・プランニング・自然言語プロンプト対話)           │
+└──────────────┬──────────────────────────────────────────▲──────────────┘
+               │                                          │
+    AST 探索・スライシング (構造把握)              処方箋・差分 (検証・適用)
+               │                                          │
+┌──────────────▼──────────────────────────┐    ┌──────────┴──────────────┐
+│             ast-digger                  │    │         icepick         │
+│  (outline / symbol / references / locate│    │  (diag / diff / fix /   │
+│      トークン効率的な構文・参照探索)    │    │   verify / feedback)    │
+└─────────────────────────────────────────┘    └─────────────────────────┘
 ```
 
----
-
-### CI / CD または一時デバッグでの利用
-CI 環境やローカルでの一時実行に限り、`DEBUG_ICEPICK_` プレフィックス付き環境変数でオーバーライド可能です。
-
-```powershell
-# PowerShell
-$env:DEBUG_ICEPICK_GEMINI_API_KEY = "your_key"
-```
-
-```bash
-# Bash / CI
-export DEBUG_ICEPICK_GEMINI_API_KEY="your_key"
-```
+1. **`ast-digger`（探索レイヤー）**: 長大なバッチクエリのアウトライン（`outline`）やシンボル定義・参照（`symbol`, `references`）をトークン消費を抑えて爆速探索。
+2. **`icepick`（診断・最適化・検証エンジン）**: 構文木解析に基づく決定論的アンチパターン診断（`diag`）、元コードのインデント・コメントを完全保持する処方箋適用（`diff`, `fix`）、等価性検証 SQL 生成（`verify`）を担当。
+3. **AI エージェント（頭脳レイヤー）**: 自身が LLM であるため、外部 API 通信を介さず `icepick` の構造化処方箋（JSON）を直接理解し、安全に最適化リライトを完遂。
 
 ---
 
 ## ⚙️ 設定 (Configuration)
 
-Icepick は、開発者や AI コーディングエージェントが柔軟かつ安全に設定を制御できるよう、明確な **設定優先順位ピラミッド（The Configuration Precedence Pyramid）** に基づいて動作します。
+Icepick は、開発者や AI コーディングエージェントが柔軟に設定を制御できるよう、明確な **設定優先順位ピラミッド（The Configuration Precedence Pyramid）** に基づいて動作します。
 
 ### 🏔️ 設定優先順位ピラミッド (The Configuration Precedence Pyramid)
 
@@ -405,180 +371,49 @@ Icepick は、開発者や AI コーディングエージェントが柔軟か�
 
 ```text
     ┌─────────────────────────────────────────────────────────────┐
-    │ 1. CLI オプション (--provider, --model, --config, etc.)      │  最高優先度
+    │ 1. CLI オプション (--dialect, --config, etc.)               │  最高優先度
     ├─────────────────────────────────────────────────────────────┤
-    │ 2. 環境変数 (ICEPICK_LLM_PROVIDER, GCP_PROJECT, etc.)       │
+    │ 2. 環境変数 (ICEPICK_DIALECT, ICEPICK_ENABLED_RULES, etc.)  │
     ├─────────────────────────────────────────────────────────────┤
     │ 3. 設定ファイル (--config 指定, .icepick.toml, icepick.json) │
     ├─────────────────────────────────────────────────────────────┤
-    │ 4. セキュア認証情報 (Windows 資格情報マネージャー: icepick:*)       │
-    ├─────────────────────────────────────────────────────────────┤
-    │ 5. 組み込みデフォルト値 (default)                             │  基底
+    │ 4. 組み込みデフォルト値 (default)                             │  基底
     └─────────────────────────────────────────────────────────────┘
 ```
 
 1. **CLI オプション (`cli`)**: コマンドライン実行時に直接渡された引数（最優先）。
-2. **環境変数 (`env`)**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GCP_PROJECT`, `GOOGLE_CLOUD_PROJECT` 等の環境変数。
+2. **環境変数 (`env`)**: `ICEPICK_DIALECT`, `ICEPICK_ENABLED_RULES`, `ICEPICK_DISABLED_RULES` 等の環境変数。
 3. **設定ファイル (`file`)**: `--config` で指定されたファイル、またはカレントディレクトリの `.icepick.toml` / `icepick.json`。
-4. **セキュア認証情報 (`keyring`)**: Windows 資格情報マネージャー (WCM) に暗号化保存されたクレデンシャル（`icepick:gemini_api_key`）。API キーは機密情報（`SECRET_KEYS`）として安全に解決されます。
-5. **組み込みデフォルト値 (`default`)**: コードベースに組み込まれた安全なフォールバックデフォルト。
+4. **組み込みデフォルト値 (`default`)**: コードベースに組み込まれた安全なフォールバックデフォルト。
 
 ---
 
-### 🔍 実行時アクティブコンフィグ・フィードバック ＆ `icepick config show`
+### 🔍 設定インスペクション (`icepick config show`)
 
-どの設定値がどのソースレイヤーによって決定されたかを可視化するため、Icepick は強力な実行時フィードバック機構を備えています。
-
-#### 1. ターミナルでの Rich バナー表示
-`diff --agentic` 実行時、適用されている設定とその決定元ソース（CLI / ENV / FILE / KEYRING / DEFAULT）がターミナル上にカラーパネルで表示されます。
-
-```text
-╭─ Active LLM Configuration ────────────────────────────────╮
-│ Active LLM Configuration:                                 │
-│   Provider: vertex (Source: cli)                          │
-│   Model:    gemini-1.5-pro (Source: cli)                  │
-│   Project:  my-company-gcp-project (Source: env)          │
-│   Location: global (Source: file)                         │
-│   Auth:     Google ADC / Subprocess Token                 │
-╰───────────────────────────────────────────────────────────╯
-```
-
-#### 2. 機械可読な `--json` 出力 (`runtime_config`)
-`config show --json` 出力などには、解決された値とソースレイヤーがすべて記録されます（API キーなどの機密情報は自動マスキング）。
-
-```json
-{
-  "file": "models/batch_mart.sql",
-  "has_changes": true,
-  "diff": "...",
-  "runtime_config": {
-    "llm_provider": { "value": "vertex", "source": "cli" },
-    "llm_model": { "value": "gemini-1.5-pro", "source": "cli" },
-    "gcp_project": { "value": "my-company-gcp-project", "source": "env" },
-    "gcp_location": { "value": "global", "source": "file" },
-    "gemini_api_key": { "value": "***", "source": "keyring" }
-  }
-}
-```
-
-#### 3. 設定インスペクション (`icepick config show`)
-現在のアクティブな設定一覧、解決元ソース、マスク済みシークレットをいつでも確認できます。`gemini_api_key` は機密情報（`SECRET_KEYS`）として管理されているため、安全にマスク表示されます。
+現在のアクティブな設定一覧と、それぞれの解決元ソース（CLI / ENV / FILE / DEFAULT）をいつでも確認できます。
 
 ```bash
 icepick config show
 ```
 
 ```text
-               Resolved Icepick Configuration               
+                Icepick Resolved Configuration               
 ┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
-┃ Configuration Key   ┃ Value               ┃ Source Layer ┃
+┃ Option              ┃ Resolved Value      ┃ Source       ┃
 ┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
 │ dialect             │ snowflake           │ default      │
-│ llm_provider        │ vertex              │ cli          │
-│ llm_model           │ gemini-1.5-pro      │ cli          │
-│ gcp_project         │ my-gcp-proj         │ env          │
-│ gcp_location        │ global              │ file         │
-│ gemini_api_key      │ ***                 │ keyring      │
+│ disabled_rules      │ []                  │ default      │
+│ enabled_rules       │ []                  │ default      │
+│ interactive         │ False               │ default      │
+│ output_patch        │ (none)              │ default      │
+│ show_diff           │ True                │ default      │
+│ write_in_place      │ False               │ default      │
 └─────────────────────┴─────────────────────┴──────────────┘
 ```
 
 機械可読な JSON 出力もサポート：
 ```bash
 icepick config show --json
-```
-
----
-
-### 🩺 接続事前診断 (Connection Health Check: `icepick config test`)
-
-局所 LLM 最適化を実行する前に、LLM（Gemini / Vertex AI）の設定・認証・ネットワーク疎通が正常かを一発で確認できるヘルスチェックコマンドです。
-
-```bash
-# 1. デフォルト設定で LLM 接続診断
-icepick config test
-
-# 2. Vertex AI の接続診断（設定ファイル未作成でも即時確認可能）
-icepick config test --provider vertex
-
-# 3. モデルを指定して診断
-icepick config test --provider vertex --model gemini-2.5-flash
-
-# 4. タイムアウト秒数を指定
-icepick config test --timeout 15.0
-
-# 5. 機械可読な JSON 出力（CI / エージェント連携）
-icepick config test --json
-```
-
-> [!TIP]
-> **Vertex AI 環境でのベストプラクティス**:  
-> デフォルトでは `gemini` プロバイダが選択されるため、Google Cloud Vertex AI（ADC認証 / サービスアカウント偽装）を利用する環境では、CLI オプション `--provider vertex`（または環境変数 `ICEPICK_LLM_PROVIDER=vertex`、設定ファイルの `llm_provider = "vertex"`）を明示的に指定して診断を実行してください。設定ファイルが未作成の状態でも即座に Vertex AI 疎通・認証の健全性を確認できます。
-
-#### 診断結果の Rich Table 表示
-接続成否、RTT（レイテンシ）、および接続先詳細が美しい表形式で可視化されます。
-
-```text
-                  Icepick Connection Health Check                 
-┏━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Service   ┃ Status ┃ Latency ┃ Details                        ┃
-┡━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ LLM       │  PASS  │ 120.4ms │ provider=vertex, model=gemini- │
-│           │        │         │ 1.5-pro, project=my-project    │
-└───────────┴────────┴─────────┴────────────────────────────────┘
-```
-
-#### 失敗時の Actionable Advice（セルフ修復ガイダンス）
-認証や接続に失敗した場合、単にエラーを表示するだけでなく、解決に必要な具体的な修復コマンド（Windows 資格情報マネージャー `cmdkey` の登録手順や `gcloud` 認証コマンド）を **Actionable Advice パネル** として提示します。
-
-```text
-╭─ Actionable Advice: LLM ─────────────────────────────────────╮
-│ Error: Gemini API key is missing or authentication failed.   │
-│                                                              │
-│ Actionable Advice:                                           │
-│ Register your Gemini API key in Windows Credential Manager:  │
-│   $cred = Get-Credential -UserName "any"                     │
-│   cmdkey /generic:icepick:gemini_api_key /user:any           │
-│     /pass:$($cred.GetNetworkCredential().Password)           │
-╰──────────────────────────────────────────────────────────────╯
-```
-
-> [!TIP]
-> **CI/CD および AI エージェント連携**:
-> `--json` オプションを指定すると、装飾なしの構造化 JSON を `stdout` に出力します。全サービスが PASS した場合は終了コード `0`、いずれかが失敗した場合は `1` を返すため、CI パイプラインでの事前ゲートや AI コーディングエージェントの自律トラブルシューティングに最適です。
-
----
-
-### 🏢 会社環境での Vertex AI 接続ガイド (Enterprise Vertex AI Setup)
-
-エンタープライズ企業環境では、個人の API キー発行が制限され、Google Cloud の IAM 権限管理と **サービスアカウント偽装 (Service Account Impersonation)** によるアクセスが義務付けられているケースが多くあります。  
-Icepick はこうした会社環境に完全対応しています。
-
-#### 1. Google Cloud ADC によるキーレス認証
-Google Cloud CLI をインストールし、アプリケーションデフォルト認証情報（ADC）を取得します。
-```bash
-gcloud auth application-default login
-```
-
-#### 2. サービスアカウント偽装への自動サブプロセスフォールバック
-権限昇格のためにサービスアカウント偽装を設定している場合：
-```bash
-gcloud config set auth/impersonate_service_account optimizer-runner@<PROJECT_ID>.iam.gserviceaccount.com
-```
-> [!TIP]
-> **自動トークン解決**: Python 標準の `google-auth` ライブラリはサービスアカウント偽装構成の ADC 読み込みでエラー（`Credentials cannot be refreshed`）を起こす場合があります。  
-> Icepick はこれを自動検知し、安全に `gcloud auth application-default print-access-token`（Windows 環境では `gcloud.cmd`）をサブプロセスで呼び出して Bearer トークンを透過的に取得・キャッシュします。追加のコード改変や手動設定は不要です。
-
-#### 3. `global` リージョン指定（エンドポイント自動最適化）
-Vertex AI の Gemini モデルは、最新のグローバルエンドポイント（`global`）に対応しています。  
-Icepick は `gcp_location` に `global` が指定された場合、リージョンプレフィックスなしの `https://aiplatform.googleapis.com` へ自動ルーティングします（`us-central1` 等の特定リージョンの場合は `{location}-aiplatform.googleapis.com`）。
-
-```bash
-# 設定ファイルまたは環境変数で指定
-export GCP_PROJECT="my-company-gcp-project"
-export GCP_LOCATION="global"
-
-# CLI で Vertex AI を使ってリライト
-icepick diff models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 ```
 
 ---
@@ -593,17 +428,6 @@ icepick diff models/batch.sql --agentic -p vertex -m gemini-1.5-pro
 ```toml
 dialect = "snowflake"
 disabled_rules = ["SNOW-007"]
-
-llm_enabled = true
-llm_provider = "vertex"
-llm_model = "gemini-1.5-pro"
-gcp_project = "my-company-gcp-project"
-gcp_location = "global"
-
-# プラガブル LLM プロバイダ固有オプション
-[llm_options]
-project = "my-company-gcp-project"
-location = "global"
 ```
 
 **JSON形式 (`icepick.json`)**:
@@ -614,24 +438,9 @@ location = "global"
   "disabled_rules": ["SNOW-007"],
   "interactive": false,
   "show_diff": true,
-  "write_in_place": false,
-  "output_patch": "patches/optimizer.patch",
-  "llm_enabled": true,
-  "llm_provider": "vertex",
-  "llm_model": "gemini-1.5-pro",
-  "gcp_project": "my-company-gcp-project",
-  "gcp_location": "global",
-  "llm_options": {
-    "project": "my-company-gcp-project",
-    "location": "global"
-  }
+  "write_in_place": false
 }
 ```
-
-> [!CAUTION]
-> **API キーなどの機密情報を設定ファイルに書かないでください！**  
-> `icepick.json` や `.icepick.toml` に API キーを平文で記述すると、GitHub への誤コミットや情報漏洩の原因になります。  
-> 認証情報は必ず前述の [セキュアな認証設定](#-セキュアな認証設定-authentication) に従って **Windows 資格情報マネージャー (WCM)** に登録してください。Icepick は実行時に自動で WCM から安全に認証情報を解決します。
 
 #### 設定キー一覧
 | キー名 | 型 | デフォルト値 | 説明 |
@@ -643,19 +452,6 @@ location = "global"
 | `show_diff` | `boolean` | `true` | ターミナル上にカラー Unified Diff を出力するか。 |
 | `write_in_place` | `boolean` | `false` | 元の SQL ファイルを直接上書き保存するか。 |
 | `output_patch` | `string \| null` | `null` | 生成された差分を保存する `.patch` ファイルのパス。 |
-| `llm_enabled` | `boolean` | `false` | 局所 LLM リライト機能を有効化するか。 |
-| `llm_provider` | `string` | `"gemini"` | LLM サービスプロバイダ (`"gemini"` または `"vertex"`)。 |
-| `llm_model` | `string` | `"gemini-3.8-flash"` | 使用する LLM モデル名。 |
-| `gcp_project` | `string \| null` | `null` | Vertex AI 利用時の Google Cloud プロジェクト ID。 |
-| `gcp_location` | `string \| null` | `"us-central1"` | Vertex AI 利用時の Google Cloud リージョン（`"global"` 推奨）。 |
-| `llm_options` | `object (dict)` | `{}` | プラガブル LLM プロバイダへ渡す固有オプション辞書（`.icepick.toml` の `[llm_options]` セクション）。 |
-
-#### 🔌 プラガブル LLM プロバイダ構成と拡張性 (Pluggable Architecture)
-Icepick はオープン・クローズドの原則（OCP）に基づき、LLM バックエンドの接続基盤を**プラガブルアーキテクチャ**として設計しています。
-- **プロバイダ固有オプションの柔軟な指定**:
-  `.icepick.toml` の `[llm_options]` セクション（または JSON の `llm_options` キー）を通じて、各プロバイダ固有のパラメータ（`project`, `location`, 各種エンドポイント設定など）を汎用 Dict として安全に渡すことができます。
-- **新規プロバイダの動的登録・差し替え**:
-  `icepick.llm.providers.base.BaseLLMProvider` を継承して `name`, `generate_text()`, `health_check()` を実装し、`register_provider()` で登録することで、既存のコアエンジン（`LLMClient` や `ConnectionTester`）に手を加えることなく新しいカスタムプロバイダ（OpenAI, Anthropic, ローカルLLM等）を追加・拡張可能です。
 
 #### 設定ファイルを指定して CLI を実行する
 `--config`（または `-c`）オプションで設定ファイルを指定して実行します。
@@ -671,17 +467,15 @@ icepick diff models/batch_mart.sql -c .icepick.toml
 
 ### 🌐 環境変数一覧
 設定ファイルを使わない場合や、CI 環境で一時的に上書きしたい場合は環境変数も利用可能です。
-| 設定項目 / 環境変数 | 説明 | 格納先 / デフォルト値 |
+| 設定項目 / 環境変数 | 説明 | デフォルト値 |
 | :--- | :--- | :--- |
-| `icepick:gemini_api_key` | Google AI Studio の API キー | **Windows 資格情報マネージャー** (推奨) |
-| `DEBUG_ICEPICK_GEMINI_API_KEY` | (デバッグ/CI用) Gemini API キー | 環境変数 (未設定) |
 | `ICEPICK_DIALECT` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) | `snowflake` |
 | `ICEPICK_ENABLED_RULES` | 有効化するルールID（カンマ区切り） | すべて有効 |
 | `ICEPICK_DISABLED_RULES` | 無効化するルールID（カンマ区切り） | なし |
-| `ICEPICK_LLM_PROVIDER` | LLM プロバイダ (`gemini` または `vertex`) | `gemini` |
-| `ICEPICK_LLM_MODEL` | LLM モデル名 (`gemini-3.8-flash`, `gemini-1.5-pro` 等) | `gemini-3.8-flash` |
-| `GCP_PROJECT` / `GOOGLE_CLOUD_PROJECT` | Google Cloud プロジェクト ID (Vertex AI 用) | なし |
-| `GCP_LOCATION` / `GOOGLE_CLOUD_REGION` | Google Cloud リージョン (Vertex AI 用) | `us-central1` |
+| `ICEPICK_INTERACTIVE` | 対話形式の確認プロンプト (`true`/`false`) | `false` |
+| `ICEPICK_SHOW_DIFF` | カラー Unified Diff 出力 (`true`/`false`) | `true` |
+| `ICEPICK_WRITE_IN_PLACE` | ファイル直接上書き (`true`/`false`) | `false` |
+| `ICEPICK_OUTPUT_PATCH` | 差分出力先 `.patch` ファイルパス | なし |
 
 ---
 
