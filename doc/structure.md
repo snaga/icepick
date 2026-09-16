@@ -13,8 +13,11 @@ Snowflake_Query_Optimizer_PoC/
 │   │   ├── README.md           # ADR 一覧・索引
 │   │   ├── 0001-*.md           # ADR-0001: 局所LLM置換アーキテクチャ
 │   │   ├── 0002-*.md           # ADR-0002: エージェント親和性設計
-│   │   ├── 0003-*.md           # ADR-0003: WCMセキュア認証基盤
-│   │   └── 0004-*.md           # ADR-0004: Snowflake接続分離と検証SQL生成純化
+│   │   ├── 0003-*.md           # ADR-0003: WCMセキュア認証基盤 (Superseded by ADR-0007)
+│   │   ├── 0004-*.md           # ADR-0004: Snowflake接続分離と検証SQL生成純化
+│   │   ├── 0005-*.md           # ADR-0005: 処方箋ファーストアーキテクチャ
+│   │   ├── 0006-*.md           # ADR-0006: レガシーコマンド削除
+│   │   └── 0007-*.md           # ADR-0007: LLM連携委譲と純粋決定論的ASTツール標準化
 │   ├── product.md              # 製品概要・プロダクト憲法
 │   ├── tech.md                 # 技術スタック仕様書
 │   ├── structure.md            # プロジェクト構造（このファイル）
@@ -25,28 +28,22 @@ Snowflake_Query_Optimizer_PoC/
 │       ├── __init__.py         # パッケージ初期化 & バージョン公開
 │       ├── cli.py              # CLIエントリポイント (typer / rich)
 │       ├── config.py           # カスケード設定解決 (Config, ConfigResolver)
-│       ├── exceptions.py       # 共通例外定義 (AuthenticationError, ParseError)
+│       ├── exceptions.py       # 共通例外定義 (IcepickError, ParseError)
 │       ├── parser.py           # sqlglotラッパー・Snowflake構文木基盤
 │       ├── agent_context.py    # Layer 2 イントロスペクション (agent-context)
 │       ├── feedback.py         # フリクションログ記録 (icepick feedback)
-│       ├── credentials.py      # 認証ヘルパーエイリアス
 │       ├── linter/             # 決定論的AST静的診断エンジン
 │       │   ├── __init__.py
 │       │   ├── base.py         # BaseRule, DiagnosticIssue, Severity
 │       │   ├── engine.py       # LinterEngine (ルール実行・集約)
 │       │   └── rules/          # 個別ルール実装
 │       │       ├── snow_001_sargable.py            # プルーニング阻害述語
-│       │       ├── snow_002_correlated.py          # 相関副クエリ (LLM連携要)
+│       │       ├── snow_002_correlated.py          # 相関副クエリ
 │       │       ├── snow_003_sort.py                # サブクエリ内ORDER BY
 │       │       ├── snow_004_implicit_cross_join.py # 暗黙クロス結合
 │       │       ├── snow_005_duplicate_scan.py      # 重複テーブルスキャン
 │       │       ├── snow_006_union.py               # UNION vs UNION ALL
 │       │       └── snow_007_nested_subquery.py     # インラインDerived Table
-│       ├── patcher/            # AST In-place置換エンジン
-│       │   ├── __init__.py
-│       │   ├── in_place.py     # ASTPatcher (node.replace / node.pop)
-│       │   ├── subquery_to_cte.py # SubqueryToCTE (CTE自動平坦化)
-│       │   ├── splicer.py      # TextSplicer (元コード最小スプライシング)
 │       ├── patcher/            # AST In-place置換エンジン
 │       │   ├── __init__.py
 │       │   ├── in_place.py     # ASTPatcher (node.replace / node.pop)
@@ -73,7 +70,6 @@ Snowflake_Query_Optimizer_PoC/
 │   ├── test_prescription_fix.py    # 処方箋インプレース適用テスト
 │   ├── test_patcher.py
 │   ├── test_subquery_to_cte.py
-│   ├── test_slicer.py
 │   ├── test_splicer.py
 │   ├── test_diff.py
 │   ├── test_equivalence.py     # 検証SQL生成テスト

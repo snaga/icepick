@@ -34,10 +34,9 @@ Snowflake 上で稼働する夜間バッチや dbt モデルなどの複雑な S
    * 健全なコード構造、コメント、インデントを 100% 維持したまま、対象ノードのみを構文木上で機械的に差し替え（`node.replace()`）または安全に切り落とし（`node.pop()`）。
 3. **インラインサブクエリの CTE 自動平坦化 (`SubqueryToCTE`)**
    * FROM/JOIN 句に深くネストした派生テーブル（Derived Table）を、**AST ノード深度降順（深さ優先）** で抽出し、依存順序を完全保証しながらトップレベルの `WITH` 句（CTE）へ自動昇格。
-4. **超軽量・高速な局所 LLM 連携 (Gemini & Vertex AI REST)**
-   * 重厚な外部 SDK（LiteLLM 等）を完全排除し、`httpx` による直接 REST 呼び出しで爆速起動を実現。
-   * 患部ノードの周辺文脈のみを最小限スライス（`ContextSlicer`）してプロンプト化し、ハルシネーションを極小化。
-   * LLM の返答は必ず `sqlglot.parse_one` で事前検証し、構文不正時は元の AST を一切壊さず安全にフォールバック（Fail-Safe）。
+4. **完全ゼロ・クレデンシャル ＆ 決定論的 AST 最適化（3 層連携アーキテクチャ）**
+   * 内部での外部 LLM API 呼び出しやネットワーク依存を完全排除し、完全ローカル＆オフラインでの高速決定論的動作を保証。
+   * トークン効率的なコード探索ツール `ast-digger`、高度な推論を行う外部 AI エージェント（Claude Code, Antigravity, GitHub Copilot 等）、そして構文解析・診断・検証エンジン `icepick` の 3 層連携を前提とした設計。
 5. **処方箋ID選択型差分生成 ＆ 書式保持直接適用 (`diff` / `fix`)**
    * `TextSplicer` によりコメントやインデントなどの元コード書式を 100% 保持したまま最小限の Unified Diff を生成。
    * 処方箋 ID（`--rx`）による局所狙い撃ち適用や `--dry-run`、非対話環境ガード（`--force`）を完備。
@@ -51,10 +50,10 @@ Snowflake 上で稼働する夜間バッチや dbt モデルなどの複雑な S
 | ルールID | ルール名 | 重要度 | 自動修正 | 診断対象と最適化アクション |
 | :--- | :--- | :---: | :---: | :--- |
 | **`SNOW-001`** | **Non-Sargable Predicate** | `HIGH` | ✅ | `DATE(col) = '2026-09-01'` 等の関数ラップによるプルーニング阻害を検知し、`col >= '...' AND col < DATEADD(...)` の範囲条件へ自動置換。 |
-| **`SNOW-002`** | **Correlated Subquery** | `CRITICAL` | ⚠️ (LLM) | 外側スコープのテーブルやエイリアスを参照する相関副クエリ（反復スキャンやメモリSpill要因）を検知し、局所LLM等による非相関化（JOIN化 / ウィンドウ関数化 / CTE集約）を推奨。 |
+| **`SNOW-002`** | **Correlated Subquery** | `CRITICAL` | ⚠️ (手動/Agent) | 外側スコープのテーブルやエイリアスを参照する相関副クエリ（反復スキャンやメモリSpill要因）を検知し、外部AIエージェント等による非相関化（JOIN化 / ウィンドウ関数化 / CTE集約）を推奨。 |
 | **`SNOW-003`** | **Redundant Sort in Subquery/CTE** | `MEDIUM` | ✅ | `LIMIT` / `FETCH` を持たない中間 CTE やサブクエリ内の無意味な `ORDER BY`（Spill や無駄なソートコストの原因）を検知し、安全に削除（`pop()`）。 |
-| **`SNOW-004`** | **Implicit Cross Join** | `HIGH` | ⚠️ (LLM) | カンマ区切り FROM 句（直積結合リスク）を検知し、明示的 JOIN または `CROSS JOIN` への書き換えを警告。※ `TABLE(FLATTEN(...))` 等の相関展開は安全に除外。 |
-| **`SNOW-005`** | **Duplicate Table Scan** | `MEDIUM` | ⚠️ (LLM) | 同一クエリ内の複数 CTE 間で同一ベーステーブルが重複スキャンされている箇所を検知し、共通 CTE 集約を推奨。 |
+| **`SNOW-004`** | **Implicit Cross Join** | `HIGH` | ⚠️ (手動/Agent) | カンマ区切り FROM 句（直積結合リスク）を検知し、明示的 JOIN または `CROSS JOIN` への書き換えを警告。※ `TABLE(FLATTEN(...))` 等の相関展開は安全に除外。 |
+| **`SNOW-005`** | **Duplicate Table Scan** | `MEDIUM` | ⚠️ (手動/Agent) | 同一クエリ内の複数 CTE 間で同一ベーステーブルが重複スキャンされている箇所を検知し、共通 CTE 集約を推奨。 |
 | **`SNOW-006`** | **Union to Union All** | `LOW` | ✅ | 重複排除が不要な `UNION` を検知し、ソート負荷を排除する `UNION ALL` へ自動置換。連鎖 UNION にも完全対応。 |
 | **`SNOW-007`** | **Inline Subquery in FROM/JOIN** | `MEDIUM` | ✅ | FROM 句や JOIN 句に直接埋め込まれた派生テーブルを検知し、トップレベル CTE への抽出・平坦化を推奨。 |
 
