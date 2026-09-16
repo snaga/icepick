@@ -20,25 +20,21 @@
 - **`difflib`** (Python標準ライブラリ):
   - Unified Diff形式（Git diff互換）の差分テキスト生成およびHunk解析。
 
-### 4. セキュア認証 & 設定管理
-- **Windows Credential Manager (WCM) / `cmdkey`**:
-  - Windows資格情報マネージャーネイティブAPI / CLIによる機密情報（`icepick:gemini_api_key`）のセキュア保管。
+### 4. 設定管理
 - **`tomli` / `tomli_w`** (Python 3.10対応) / `json`:
-  - 設定ファイル（`.icepick.toml`, `icepick.json`）のパースおよびシリアライズ。
+  - 設定ファイル（`.icepick.toml`, `icepick.json`）のパースおよびシリアライズ（方言やLinterルール設定の管理）。
 
-### 5. HTTP通信 & クラウド認証
-- **`httpx`**:
-  - 軽量・高速なHTTPクライアント。Gemini API (Google AI Studio) および Google Cloud Vertex AI の REST API (`generateContent`) を直接呼び出す。重厚な外部LLM抽象化レイヤーを排除し、CLIの高速起動と最小限の依存関係を実現。
-- **`google-auth`**:
-  - Vertex AI 利用時の ADC (Application Default Credentials) に基づく Google Cloud OAuth2 Bearer トークン解決。
+### 5. 外部通信ライブラリの非依存化 (ADR-0007)
+- **ゼロ・ネットワーク依存**:
+  - ADR-0007 に基づき、内部 LLM 呼び出し（`httpx`, `google-auth`）を完全に排除。外部ネットワーク通信を一切行わない完全オフライン・高速ローカル動作を実現。
 
 ## 🧪 テストツール
-- **`pytest`**: ユニットテスト・結合テスト実行フレームワーク（375+ テスト、100% PASS）。
+- **`pytest`**: ユニットテスト・結合テスト実行フレームワーク（380+ テスト、100% PASS）。
 - **`pytest-cov`**: テストカバレッジ測定（目標 90% 以上維持）。
 - **デトロイト派（Classical TDD / 状態検証）**:
   - AST変換、ルール診断、Diff生成、検証SQL生成など純粋関数・決定論的コンポーネントに対する実オブジェクト状態検証。
 - **ロンドン派（Mockist TDD / 振る舞い検証）**:
-  - LLM API呼び出し、外部プロセス（gcloud / cmdkey）、CLIエントリポイント（Typer CliRunner）に対するモック検証。
+  - CLIエントリポイント（Typer CliRunner）に対する検証。
 
 ## 🔧 開発ツール
 - **`uv`**: 超高速パッケージマネージャー兼仮想環境管理。
@@ -53,11 +49,5 @@
   - 公式 `snow CLI`（Snowflake CLI）とのパイプライン連携（`icepick verify orig.sql opt.sql | snow sql -f -`）を標準サポート。
 
 ## 🔗 外部API / サービス
-- **Google Gemini API (Google AI Studio)**:
-  - モデル: `gemini-2.5-flash` 等
-  - 認証方式: API キー（WCM: `icepick:gemini_api_key` または環境変数）
-  - エンドポイント: `https://generativelanguage.googleapis.com/v1beta/`
-- **Google Cloud Vertex AI**:
-  - モデル: `gemini-2.5-flash` 等
-  - 認証方式: Application Default Credentials (ADC) / `gcloud auth application-default login`
-  - エンドポイント: `https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
+- **完全ローカル・オフライン動作 (ADR-0007)**:
+  - CLI 内部から外部 API（Gemini / Vertex AI REST API 等）への通信は一切行わず、LLM 推論やピンポイントリライトは呼び出し元の AI コーディングエージェントおよび `ast-digger` に委譲する（機密 SQL 完全保護設計）。

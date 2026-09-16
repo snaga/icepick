@@ -1,7 +1,7 @@
 # 0003. セキュア認証情報管理とマルチソース設定優先順位ピラミッドの確立
 
-* **ステータス**: Accepted
-* **決定日**: 2026-09-13
+* **ステータス**: Superseded (by [ADR-0007](0007-decouple-llm-integration-and-pure-deterministic-ast-tool-standardization.md))
+* **決定日**: 2026-09-13 (更新: 2026-09-16)
 
 ---
 

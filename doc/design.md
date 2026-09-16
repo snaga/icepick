@@ -8,17 +8,16 @@
   - [LinterEngine (icepick/linter/)](#linterengine-icepicklinter)
   - [ASTPatcher & SubqueryToCTE (icepick/patcher/)](#astpatcher--subquerytocte-icepickpatcher)
   - [ContextSlicer, LLMClient & プラガブルプロバイダ基盤 (icepick/llm/)](#contextslicer-llmclient--プラガブルプロバイダ基盤-icepickllm)
-  - [DiffFormatter & TextSplicer (icepick/diff/, icepick/patcher/)](#diffformatter--textsplicer-icepickdiff-icepickpatcher)
-  - [EquivalenceVerifier / 検証 SQL 生成器 (icepick/verifier/)](#equivalenceverifier--検証-sql-生成器-icepickverifier)
-  - [FeedbackRecorder (icepick/feedback.py)](#feedbackrecorder-icepickfeedbackpy)
-  - [エージェント親和性アーキテクチャ (Agent-Native CLI Interface)](#エージェント親和性アーキテクチャ-agent-native-cli-interface)
-  - [セキュア認証情報プロバイダ (Secure Credential Management)](#セキュア認証情報プロバイダ-secure-credential-management)
-  - [エージェント準備状況テスト (Agent Readiness Test)](#エージェント準備状況テスト-agent-readiness-test)
-  - [ConfigResolver & 実行時コンフィグ・フィードバック (icepick/config.py)](#configresolver--実行時コンフィグフィードバック-icepickconfigpy)
-  - [LLM 接続診断エンジン (ConnectionTester / icepick config test)](#llm-接続診断エンジン-connectiontester--icepick-config-test)
-  - [処方箋駆動最適化エンジン (PrescriptionEngine / icepick diag / diff / fix)](#処方箋駆動最適化エンジン-prescriptionengine--icepick-diag--diff--fix)
-- [シーケンス図（対話型リファクタリングフロー）](#シーケンス図対話型リファクタリングフロー)
-- [エラーハンドリング](#エラーハンドリング)
+  - [DiffFormatter & TextSplicer (icepick/diff/, icepick/patcher/)](#44-diffformatter--textsplicer-icepickdiff-icepickpatcher)
+  - [EquivalenceVerifier / 検証 SQL 生成器 (icepick/verifier/)](#45-equivalenceverifier--検証-sql-生成器-icepickverifier)
+  - [FeedbackRecorder (icepick/feedback.py)](#46-feedbackrecorder-icepickfeedbackpy)
+  - [エージェント親和性アーキテクチャ (Agent-Native CLI Interface)](#47-エージェント親和性アーキテクチャ-agent-native-cli-interface)
+  - [完全ゼロ・クレデンシャル & オフライン保証](#48-完全ゼロクレデンシャル--オフライン保証)
+  - [エージェント準備状況テスト (Agent Readiness Test)](#49-エージェント準備状況テスト-agent-readiness-test)
+  - [ConfigResolver & 実行時コンフィグ・フィードバック (icepick/config.py)](#410-configresolver--実行時コンフィグフィードバック-icepickconfigpy)
+  - [処方箋駆動最適化エンジン (PrescriptionEngine / icepick diag / diff / fix)](#412-処方箋駆動最適化エンジン-prescriptionengine--icepick-diag--diff--fix)
+- [シーケンス図（処方箋駆動リファクタリングフロー）](#シーケンス図処方箋駆動リファクタリングフロー)
+- [エラーハンドリング](#6-エラーハンドリング)
 
 
 ## 機能一覧
@@ -27,7 +26,7 @@
 |:------------|:-------|:------|:-----|:----------|
 | 構文解析・静的診断 | F-A1 | Snowflake SQL構文解析 | sqlglotを用いたSnowflake方言AST構築と構文エラーハンドリング | A-1 |
 | 構文解析・静的診断 | F-A2 | プルーニング阻害述語診断 | WHERE句の関数ラップによるフルスキャン要因（SNOW-001）検出 | A-2 |
-| 構文解析・静的診断 | F-A3 | 相関副クエリ診断 | 外側スコープ参照を含む相関副クエリ（SNOW-002, LLM連携要）検出 | A-3 |
+| 構文解析・静的診断 | F-A3 | 相関副クエリ診断 | 外側スコープ参照を含む相関副クエリ（SNOW-002）検出 | A-3 |
 | 構文解析・静的診断 | F-A4 | 不要ソート診断 | サブクエリ/CTE内の無意味なORDER BY（SNOW-003）検出 | A-4 |
 | 構文解析・静的診断 | F-A5 | ネストサブクエリ診断 | FROM/JOIN句に直接ネストしたDerived Table（SNOW-007）検出 | A-5 |
 | 構文解析・静的診断 | F-A6 | UNION最適化診断 | 重複排除不要なUNIONからUNION ALLへの置換候補（SNOW-006）検出 | A-6 |
@@ -35,27 +34,24 @@
 | 構文解析・静的診断 | F-A8 | 重複テーブルスキャン診断 | 複数CTE間での同一テーブル反復スキャン（SNOW-005）検出 | A-8 |
 | AST置換・最適化 | F-B1 | 決定論的ノード置換 | AST In-place置換による健全ノード維持と局所手術 | B-1 |
 | AST置換・最適化 | F-B2 | Derived Table平坦化 | ネストサブクエリのトップレベルCTE外出し・平坦化 | B-2 |
-| AST置換・最適化 | F-B3 | 局所スライスリライト | ContextSlicerとLLMClientによる局所リライト適用 | B-3 |
+| AST置換・最適化 | F-B3 | エージェント連携リライト支援 | ast-digger構文特定情報を含む処方箋とAST構文検証 | B-3 |
 | AST置換・最適化 | F-B4 | UNION ALL置換 | UNIONからUNION ALLへの決定論的ルール置換 | B-4 |
 | AST置換・最適化 | F-B5 | 明示的JOIN置換 | 暗黙クロス結合からINNER JOIN等への決定論的置換 | B-5 |
 | 処方箋駆動最適化 | F-C1 | 構造化処方箋診断 | icepick diagによる処方箋ID採番とRichカード/JSON出力 | C-1 |
 | 処方箋駆動最適化 | F-C2 | 処方箋ID選択型差分生成 | icepick diffによる特定処方箋（--rx）に絞り込んだ局所Diff生成 | C-2 |
 | 処方箋駆動最適化 | F-C3 | 処方箋ID選択型ファイル適用 | icepick fixによる特定処方箋（--rx）の元ファイル直接適用 | C-3 |
-| 処方箋駆動最適化 | F-C4 | LLM Agentic処方箋リライト | icepick diag/diff --agenticによる高度な処方箋生成・リライト | C-4 |
+| 処方箋駆動最適化 | F-C4 | エージェント自律連携IF | 完全ローカル処方箋プランと理由・期待効果のエージェント提供 | C-4 |
 | 処方箋駆動最適化 | F-C5 | 書式保持スプライシング | TextSplicerによるコメント・インデント完全保持最小Diff生成 | C-5 |
 | 等価性検証 | F-D1 | 双方向EXCEPT検証SQL生成 | icepick verifyによる決定論的等価性検証SQL出力（snow CLI委譲） | D-1 |
 | エージェント親和性・運用 | F-E1 | フリクション記録 | icepick feedbackによる課題・バグのローカル追記記録 | E-1 |
 | エージェント親和性・運用 | F-E2 | 構造化JSON出力 | 全コマンドでの機械判読可能な--json出力 | E-2 |
 | エージェント親和性・運用 | F-E3 | 非対話環境ハング防止 | 非TTY環境でのプロンプト待機防止とActionable Advice | E-3 |
-| エージェント親和性・運用 | F-E4 | セキュア認証管理 | WCMネイティブ連携と優先順位解決ピラミッド（ゼロDB認証） | E-4 |
+| エージェント親和性・運用 | F-E4 | 完全ゼロ・クレデンシャル保証 | 外部通信・APIキー要求の完全排除とオフライン動作保証 | E-4 |
 | エージェント親和性・運用 | F-E5 | Layer 2 イントロスペクション | 全機能・ルール仕様を一括出力するicepick agent-context | E-5 |
 | エージェント親和性・運用 | F-E6 | 破壊的操作防止ガード | --dry-runおよび非対話環境での--force必須化 | E-6 |
-| エージェント親和性・運用 | F-E7 | カスケード設定解決 | CLI > 環境変数 > 設定ファイル > デフォルト値のカスケード統合 | E-7 |
-| エージェント親和性・運用 | F-E8 | 実行時コンフィグ表示 | 有効な設定項目と解決元ソースを明示するバナー・show出力 | E-8 |
-| エージェント親和性・運用 | F-E9 | 機密情報漏洩防止 | 設定ファイルからの秘密情報除外と表示時マスク | E-9 |
-| エージェント親和性・運用 | F-E10 | LLM接続診断 | icepick config testによるLLMバックエンドの疎通・認証検証 | E-10 |
-| プラガブルプロバイダ | F-F1 | プロバイダ分離・設定汎化 | BaseLLMProvider基盤と辞書形式optionsによる拡張基盤 | F-1 |
-| プラガブルプロバイダ | F-F2 | Vertex AI堅牢化・明示案内 | role: "user"準拠、マルチパート集約、--provider案内 | F-2 |
+| エージェント親和性・運用 | F-E7 | 自己修正引数エラー | 不正引数時の許容値一覧（enum）および正しいコマンド例提示 | E-7 |
+| エージェント親和性・運用 | F-E8 | エージェント準備状況テスト | 非TTY・ハング防止・完全オフライン動作の自動テスト保証 | E-8 |
+| エージェント親和性・運用 | F-E9 | マルチソース設定解決 | 方言・Linter設定の優先順位解決とicepick config show表示 | E-9 |
 
 ## アーキテクチャ
 
@@ -198,110 +194,47 @@ class PrescriptionPlan:
   4. トップレベルの `ast.args["with_"]`（存在しない場合は `ast.set("with_", exp.With(expressions=[...]))`）に追加。
   5. 元のサブクエリノードを `exp.Table(this=cte_alias, alias=original_alias)` で置換。
 
-### 4.3 `ContextSlicer`, `LLMClient` & プラガブルプロバイダ基盤 (`icepick/llm/`)
-- 対応要件: B-3, C-1, C-4, F-1, F-2
-- **IPO 記述**:
-  - **Input**:
-    - `target_node`: 置換対象の AST ノード（相関サブクエリ、複雑な結合、共通スキャンノード等）
-    - `ast`: クエリ全体のルート AST
-    - `issue`: `DiagnosticIssue`（ルールID、説明、検出メッセージ）
-    - `verification_feedback`: （再試行時）前回の EXCEPT 差分結果または構文エラーメッセージ
-  - **Processing**:
-    1. `ContextSlicer` が対象ノードと直属の親ノード（CTE / 主クエリ）、外部参照テーブル、参照カラム定義を抽出して最小限の Markdown コンテキストを生成。
-    2. `LLMClient` がファサードとして機能し、指定されたプロバイダ（`gemini`, `vertex` 等）のインスタンス（`BaseLLMProvider` 実装）へプロンプト送信を委譲。
-    3. 各プロバイダがそれぞれの REST API（AI Studio generativelanguage, Vertex AI aiplatform 等）を呼び出してテキストを生成。
-    4. LLM レスポンスから SQL コードブロックを抽出。
-    5. `sqlglot.parse_one(response_sql, read="snowflake")` で構文検証。構文エラー時は自動リトライまたは安全フォールバック。
-    6. ADR-0004 に基づき、Snowflake 直接接続自己修復ループは行わず、構文検証済み置換ノードを安全に返却（等価性検証は生成パッチに対し `icepick verify` を行い、外部エージェントがオーケストレーション）。
-  - **Output**:
-    - 最適化された置換 AST ノード（構文検証済み）
-
-- **プラガブル LLM プロバイダ・アーキテクチャ**:
-  外部LLMライブラリ（LangChain等）に依存せず、軽量 `httpx` を基盤とした拡張性の高い疎結合設計を採用。
+### 4.3 `ast-digger` & AIエージェント連携型リライト支援
+- 対応要件: B-3, C-4
+- **設計思想 (3層アーキテクチャの役割分担)**:
+  - ADR-0007 に基づき、`icepick` 内部での LLM 直接呼び出し・HTTP通信・認証管理を完全撤廃。
+  - 呼び出し元の AI エージェント（Claude Code, Antigravity, Roo Code 等）自身が最先端の LLM であり、`ast-digger` と `icepick` を道具として組み合わせて自律的にリファクタリングを完遂する 3 層アーキテクチャを採用する。
 
   ```mermaid
-  classDiagram
-      class LLMClient {
-          +provider: BaseLLMProvider
-          +model: str
-          +generate_text(prompt: str) str
-          +rewrite_fragment(slice_ctx: SliceContext, dialect: str) Expression
-          +_extract_sql(text: str) str
-      }
+  flowchart LR
+      subgraph Layer1 ["1. 構文探索 & スライシング"]
+          AD["ast-digger"]
+      end
 
-      class BaseLLMProvider {
-          <<abstract>>
-          +name: str
-          +model: str
-          +options: dict[str, Any]
-          +timeout: float
-          +generate_text(prompt: str)* str
-          +health_check()* dict[str, Any]
-      }
+      subgraph Layer2 ["2. 診断・処方・決定論的パッチ"]
+          IP["icepick (Pure AST Engine)"]
+      end
 
-      class GeminiProvider {
-          +api_key: str | None
-          +generate_text(prompt: str) str
-          +health_check() dict[str, Any]
-      }
+      subgraph Layer3 ["3. 自律推論 & リライト"]
+          Agent["AI Coding Agent (LLM)"]
+      end
 
-      class VertexAIProvider {
-          +project: str | None
-          +location: str
-          +_get_token() str
-          +generate_text(prompt: str) str
-          +health_check() dict[str, Any]
-      }
-
-      class ProviderRegistry {
-          +register(name: str, cls: type)
-          +create(name: str, model: str, options: dict) BaseLLMProvider
-      }
-
-      LLMClient --> BaseLLMProvider : delegates
-      BaseLLMProvider <|-- GeminiProvider : implements
-      BaseLLMProvider <|-- VertexAIProvider : implements
-      ProviderRegistry ..> BaseLLMProvider : instantiates
+      Agent -->|1. 構文木・CTE俯瞰| AD
+      Agent -->|2. icepick diag --format json| IP
+      IP -->|PrescriptionPlan (RX-xxx, 所属CTE, ノード種別)| Agent
+      Agent -->|3. ast-digger symbol で患部切り出し| AD
+      Agent -->|4. 高度推論・局所リライト| Agent
+      Agent -->|5. icepick diff / fix で安全適用| IP
+      IP -->|Unified Diff / ファイル更新| Agent
   ```
 
-  - **`BaseLLMProvider` (抽象基底クラス `icepick.llm.providers.base`)**:
-    - 責務: 全 LLM プロバイダの共通契約（インターフェース）の定義。
-    - 共通属性: `name: str`, `model: str`, `options: dict[str, Any]`, `timeout: float`, `_http_client: httpx.Client | None`
-    - 必須メソッド:
-      - `generate_text(prompt: str) -> str`: テキスト生成の実行。
-      - `health_check() -> dict[str, Any]`: 疎通・認証の健全性チェック（成否、レイテンシ、メタデータ、Actionable Advice）。
-  - **`GeminiProvider` (`icepick.llm.providers.gemini`)**:
-    - 責務: Google AI Studio Gemini API との通信および API キー認証。
-    - 個別設定 (`options: dict[str, Any]`):
-      - `api_key`: API キー（指定なし時は WCM `icepick:gemini_api_key` または `DEBUG_ICEPICK_GEMINI_API_KEY` から自動解決）。
-    - エンドポイント: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
-    - 認証: ヘッダー `x-goog-api-key: {api_key}`
-  - **`VertexAIProvider` (`icepick.llm.providers.vertex`)**:
-    - 責務: Google Cloud Vertex AI API との通信および OAuth2 / ADC 認証。
-    - 個別設定 (`options: dict[str, Any]`):
-      - `project`: GCP プロジェクト ID
-      - `location`: リージョン（デフォルト: `"us-central1"`, `"global"` 指定可）
-    - 認証フロー:
-      - 第 1 候補: `google-auth` による ADC トークン取得
-      - 第 2 候補 (フォールバック): `gcloud` CLI（`gcloud auth application-default print-access-token`）による直接トークン取得
-      - 取得したトークンを `Authorization: Bearer {token}` として付与。
-    - エンドポイント:
-      - `location == "global"`: `https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google/models/{model}:generateContent`
-      - その他リージョン: `https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
-    - リクエスト構造 (Smart Search 準拠):
-      - `contents`: `[{"role": "user", "parts": [{"text": prompt}]}]`（Vertex AI REST 仕様に則り `role: "user"` を明示設定してスキーマエラーを防止）
-    - レスポンス解析:
-      - `candidates[0].content.parts` 内のすべてのパーツを走査し、`text` フィールドを連結抽出（思考モデルの thought パートと回答テキストパートの分離・集約に対応）
-  - **エージェント向け明示的プロバイダ案内 (Actionable Provider Guidance)**:
-    - 暗黙の自動判別・サイレントフォールバックは採用せず、挙動の決定論性とコンテキスト明快性を維持。
-    - プロバイダがデフォルト（`gemini`）で認証情報が不足している場合、Vertex AI 利用希望者への具体的な切り替え手順（`--provider vertex`、環境変数 `ICEPICK_LLM_PROVIDER=vertex`、`.icepick.toml` の `llm_provider = "vertex"`）を Actionable Advice として明示提示。
-  - **汎化設定辞書 (`provider_options: dict[str, Any]`)**:
-    - プロバイダ固有の設定（APIキー、GCPプロジェクト、リージョン、将来のパラメータ等）は、すべて `dict[str, Any]` として汎化され、プロバイダファクトリおよび各プロバイダ初期化子に透過的に渡される。
-    - `LLMClient(..., provider_options={"project": "my-p", "location": "asia-northeast1"})` 形式を標準化しつつ、既存のキーワード引数（`api_key`, `project`, `location`）も自動マージして完全な後方互換性を担保。
-  - **プロバイダレジストリ (`ProviderRegistry` / `create_provider`)**:
-    - サポート対象プロバイダ（`gemini`, `vertex`）を登録・解決するファクトリ機構。
-    - 未知のプロバイダが渡された場合は、利用可能なプロバイダ一覧（`gemini`, `vertex`）を提示する Actionable な `ValueError` を送出。
-    - `register_provider(name, cls)` により、将来の新規プロバイダ（OpenAI, Claude, ローカルLLM等）をプラグイン的に追加可能。
+- **IPO 記述**:
+  - **Input**:
+    - `PrescriptionPlan`（`icepick diag --format json` の構造化処方箋）
+    - 所属 CTE、AST ノード種別、行番号範囲情報
+  - **Processing**:
+    1. `icepick diag` は各指摘事項に一意な処方箋ID（`RX-001` 等）を採番し、所属 CTE、ノード種別、置換前後の SQL 断片、修正理由（`rationale`）、期待効果（`expected_impact`）を完全ローカルで生成。
+    2. 外部エージェントは `ast-digger symbol <file> <cte_name>` 等を用いて、必要な患部 CTE のみをピンポイントにスライシング・探索。
+    3. ルールベース置換（DELETE / REPLACE）可能な処方箋は `icepick diff --rx <id>` または `icepick fix --rx <id>` で決定論的に適用。
+    4. 高度な推論が必要な課題（相関副クエリの非相関化や共通CTE集約）は、エージェント自身の強力なコンテキスト・最新モデルでリライトを実行。
+    5. エージェントが生成した置換 SQL は、`sqlglot.parse_one()` による構文検証を経て、`TextSplicer` により元のコメント・インデントを 100% 維持したまま局所適用。
+  - **Output**:
+    - 外部ネットワーク通信 0、秘密情報漏洩リスク 0 の安全かつ決定論的なリファクタリング差分。
 
 ### 4.4 `DiffFormatter` & `TextSplicer` (`icepick/diff/`, `icepick/patcher/`)
 - 対応要件: C-1, C-2, C-3, C-5
@@ -414,95 +347,42 @@ class PrescriptionPlan:
 - **自己修正エラー (Actionable & Enumerated Errors)**:
   - 引数やオプションのバリデーションエラー時、可能な値の列挙（enumリスト）と、コピペして実行可能な修正コマンド例を出力。
 
-### 4.8 セキュア認証情報プロバイダ (Secure Credential Management)
+### 4.8 完全ゼロ・クレデンシャル & オフライン保証
 - 対応要件: E-4
-- **厳格な優先順位ピラミッド (The Strict Priority Pyramid)**:
-  1. 一時デバッグ/CI用環境変数（`DEBUG_ICEPICK_` プレフィックス必須。例: `DEBUG_ICEPICK_GEMINI_API_KEY`）
-  2. Windows 資格情報マネージャー（Target: `icepick:gemini_api_key`）
-  ※意図しないグローバル環境変数（`GEMINI_API_KEY` 等）や設定ファイルへの平文記載は、混入・漏洩・混乱防止のため探索対象から完全に除外する。
-- **WCM 管理の純化 (ADR-0004)**:
-  - ADR-0004 により Snowflake 接続責任を外部公式ツール（`snow CLI` 等）に委ねたため、データベース認証情報の管理は全廃。
-  - Icepick が管理する機密情報は、Google AI Studio の **`icepick:gemini_api_key`** のみとなる。
-- **UTF-16LE / Null Byte トラップ対策**:
-  - Windows `cmdkey` 登録時に混入する UTF-16LE（null バイト `0x00`）を自動検知し、安全にデコードして HTTP リクエストヘッダーの破壊を防ぐ。
-- **Actionable な認証エラーとセキュア登録案内**:
-  - 認証情報が取得できない場合、シェル履歴に残さない安全な登録コマンドを含む具体的な自己修正手順を提示して exit code 1 で終了：
-    - **Gemini API キー未設定時**:
-      ```text
-      [Error] Gemini API key not found.
-      Set DEBUG_ICEPICK_GEMINI_API_KEY or register to Windows Credential Manager:
-        powershell -Command "$p = Read-Host 'Enter Key' -AsSecureString; cmdkey /generic:icepick:gemini_api_key /user:apikey /pass:([System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($p)))"
-      ```
-    - **Vertex AI 認証未設定時**:
-      ```text
-      [Error] Vertex AI credentials or project not configured.
-      Run 'gcloud auth application-default login' or specify --project / ICEPICK_VERTEX_PROJECT.
-      ```
+- **完全ゼロ・クレデンシャル設計 (ADR-0004 & ADR-0007)**:
+  - ADR-0004 により Snowflake データベースへの直接接続責任を外部公式ツール（`snow CLI` 等）に委ね、データベース認証情報を全廃。
+  - ADR-0007 により 内部 LLM 連携（Gemini / Vertex AI）を完全撤廃したことで、Google AI Studio API キーや Google Cloud ADC 資格情報の管理も全廃。
+  - `icepick` の全コマンド（`diag`, `diff`, `fix`, `verify`, `config`, `feedback`, `agent-context`）において、APIキー、トークン、パスワードなどの認証情報を一切要求・保存・探索しない。
+- **完全ローカル・オフライン動作の保証**:
+  - 外部エンドポイント（LLM API、クラウドREST API、外部DB）への直接ネットワーク通信を一切行わない。
+  - 企業内の機密 SQL、テーブルスキーマ、ビジネスロジックが外部ネットワークへ送信・漏洩するリスクを恒久的にゼロにする。
 
 ### 4.9 エージェント準備状況テスト (Agent Readiness Test)
 - 対応要件: E-8
 - **テスト設計 (`tests/test_agent_readiness.py`)**:
   1. **非TTYハング防止テスト**: `stdin` を `io.StringIO` やパイプ模倣オブジェクトに差し替え、プロンプト待ちでブロックせずに終了することを確認。
   2. **構造化出力テスト**: 全サブコマンド（`diag`, `diff`, `fix`, `verify`, `feedback`, `agent-context`）に `--json` を渡した際、有効な JSON が標準出力から取得でき、エラー情報が標準エラー出力に分離されていることを検証。
-  3. **Actionable Error検証**: 認証未設定時および不正引数指定時に、有効な enum 一覧および復旧コマンド例が出力に含まれていることを検証。
+  3. **完全オフライン動作検証**: 外部通信モジュール（`httpx` 等）への依存を排除し、ネットワーク切断環境下でも全コマンドが決定論的かつ高速に動作することを検証。
+  4. **Actionable Error検証**: 不正引数指定時に、有効な enum 一覧および復旧コマンド例が出力に含まれていることを検証。
 
 ### 4.10 `ConfigResolver` & 実行時コンフィグ・フィードバック (`icepick/config.py` または `cli.py`)
-- 対応要件: E-9, C-4, E-4
+- 対応要件: E-9
 - **優先順位ピラミッド (Configuration Precedence)**:
-  1. **CLI オプション**: `--provider` (`-p`), `--model` (`-m`), `--timeout` (`-t`), `--dialect` (`-d`) 等
-  2. **環境変数**: `ICEPICK_LLM_PROVIDER`, `ICEPICK_LLM_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` 等（※機密項目を除く）
-  3. **設定ファイル**: `--config` 指定ファイル、または暗黙の `.icepick.toml` / `icepick.json`（インフラ構成のみ。認証情報は記載不可・無視）
-  4. **セキュア認証情報**: Windows 資格情報マネージャー（WCM: `icepick:gemini_api_key`）
-  5. **組み込みデフォルト値**: `llm_provider="gemini"`, `llm_model="gemini-3.8-flash"`, `location="us-central1"` 等
-- **機密項目（`SECRET_KEYS`）の特別解決ルール**:
-  - `SECRET_KEYS = {"gemini_api_key"}`
-  - 設定ファイルや汎用環境変数（`GEMINI_API_KEY` 等）にはシークレットを配置させず、混在による混乱を防止する。
-  - 機密項目の解決経路は「1. デバッグ環境変数（`DEBUG_ICEPICK_GEMINI_API_KEY`）」または「2. WCM（`icepick:gemini_api_key`）」のみに限定する。
+  1. **CLI オプション**: `--dialect` (`-d`), `--config` (`-c`) 等
+  2. **環境変数**: `ICEPICK_DIALECT` 等
+  3. **設定ファイル**: `--config` 指定ファイル、または暗黙の `.icepick.toml` / `icepick.json`（Dialect、Linter ルール有効/無効設定）
+  4. **組み込みデフォルト値**: `dialect="snowflake"`
 - **IPO 記述**:
-  - **Input**: CLI 引数、明示的/暗黙の設定ファイルパス、環境変数辞書、WCM
+  - **Input**: CLI 引数、明示的/暗黙の設定ファイルパス、環境変数辞書
   - **Processing**:
     1. 各設定項目について、優先順位に従い上書きマージを実行。
-    2. 各項目の値とともに、解決されたソース（`cli_option`, `environment_variable`, `config_file`, `credential_manager`, `default`）を記録した `RuntimeConfigSummary` を構築。
-    3. `--agentic` 実行時に、アクティブな設定とソースをターミナルに表示。
-    4. `--json` 指定時は出力 JSON のルート要素に `runtime_config` オブジェクトを含めてシリアライズ。
+    2. 各項目の値とともに、解決されたソース（`cli_option`, `environment_variable`, `config_file`, `default`）を記録した `RuntimeConfigSummary` を構築。
+    3. `--json` 指定時は出力 JSON に適用された設定値と解決元ソースを含めてシリアライズ。
   - **Output**:
     - マージ済み `Config` インスタンス
-    - `RuntimeConfigSummary`（キー、値、ソース、マスク済み機密情報）
+    - `RuntimeConfigSummary`（キー、値、ソース）
 - **確認コマンド (`icepick config show`)**:
-  - 現在解決されている全設定項目（LLM設定、Dialect設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。機密項目は `display_value` でマスクされる。
-
-### 4.11 LLM 接続診断エンジン (`ConnectionTester` / `icepick config test`)
-- 対応要件: E-10, F-2
-- **設計思想**:
-  - 最適化（`diag --agentic` / `diff`）を実行する前に、LLM バックエンド（Gemini / Vertex AI）の設定が正常かつ通信可能であるかを事前検証し、初期導入時のトラブルシューティングコストを最小化する。
-- **データ構造**:
-  - `ServiceTestResult`:
-    - `service: str`: サービス識別子（`"llm"`）
-    - `success: bool`: 接続・疎通成否
-    - `duration_ms: float`: 往復応答時間（ミリ秒）
-    - `message: str`: 成功サマリーまたはエラーメッセージ
-    - `details: dict[str, Any]`: 接続先メタデータ（プロバイダ/モデル名、プロジェクト/ロケーション等）
-    - `actionable_advice: str | None`: 失敗時の自己修正コマンド・ガイダンス
-  - `ConnectionHealthReport`:
-    - `results: dict[str, ServiceTestResult]`: 診断結果
-    - `all_passed: bool`: 実行された全チェックが成功したか否か
-    - `to_dict() -> dict[str, Any]`: 機械可読シリアライズ辞書
-- **IPO 記述**:
-  - **Input**: `Config` インスタンス、タイムアウト秒数、プロバイダ上書き（`provider`）、モデル上書き（`model`）
-  - **Processing**:
-    - アクティブなプロバイダ（Gemini または Vertex AI、CLI 引数による上書き可）に応じて認証トークン/APIキーを解決。
-    - プロバイダの `health_check()` または最小限の Ping リクエストを送信し、HTTP 200 かつ有効なレスポンスが返るか検証。所要時間を計測。
-    - 認証欠損時や通信エラー時は `actionable_advice`（`gcloud auth application-default login` や `cmdkey /generic:icepick:gemini_api_key ...`、および Vertex AI 指定方法案内）を付与。
-  - **Output**:
-    - `ConnectionHealthReport` インスタンス
-    - Rich ターミナル表示（ステータステーブル、応答時間、接続先情報、Actionable Advice）
-    - `--json` 指定時は構造化 JSON 出力
-    - 終了コード（成功: 0, 失敗: 1）
-- **CLI コマンド体系**:
-  - `icepick config test`: LLM 接続診断を実行
-  - `icepick config test --provider vertex`: プロバイダを明示指定してテスト（設定ファイル不要）
-  - `icepick config test --model gemini-2.5-flash`: モデルを明示指定してテスト
-  - `icepick config test --json`: 構造化 JSON 出力
+  - 現在解決されている全設定項目（Dialect設定、Linterルール設定）とその解決元ソースを Rich テーブル形式で一覧表示。
 
 ### 4.12 処方箋駆動最適化エンジン (`PrescriptionEngine` / `icepick diag` / `diff` / `fix`)
 - 対応要件: C-1, C-2, C-3, C-4, C-5
@@ -614,22 +494,22 @@ sequenceDiagram
 ### 6.1 終了コード体系 (Exit Codes)
 | 終了コード | 分類 | 発生条件・対象コマンド | エージェント推奨アクション |
 |:---:|:---|:---|:---|
-| **0** | 正常終了 (Success) | ・`diag`: 課題 0 件（クリーン）<br>・`diff`: Diff 生成成功<br>・`fix`: 処方箋適用成功<br>・`verify`: 検証 SQL 出力成功<br>・`config test`: LLM 接続検証成功 | 次のパイプラインステップへ進行。 |
-| **1** | 課題検出 / 検証不一致 / 設定・認証エラー | ・`diag`: 1 件以上の処方箋検出<br>・`config test`: LLM 認証・通信失敗<br>・`diag/diff --agentic`: LLM 認証キー未設定<br>・不正な CLI オプション / カテゴリ引数 | stderr の Actionable Advice に従い設定・認証を修復、または `diff`/`fix` を実行。 |
+| **0** | 正常終了 (Success) | ・`diag`: 課題 0 件（クリーン）<br>・`diff`: Diff 生成成功（変更なし含む）<br>・`fix`: 処方箋適用成功<br>・`verify`: 検証 SQL 出力成功<br>・`config show` / `feedback` / `agent-context`: 実行成功 | 次のパイプラインステップへ進行。 |
+| **1** | 課題検出 / 引数・適用エラー | ・`diag`: 1 件以上の処方箋検出<br>・`diff` / `fix`: 無効な処方箋 ID 指定（`--rx`）<br>・`fix`: 非TTY環境での `--force` 未指定<br>・不正な CLI オプション / 不正な Severity / カテゴリ引数 | stderr の Actionable Advice に従い引数を修正、または `diff` / `fix` を実行。 |
 | **2** | 致命的構文パースエラー / ファイル入出力エラー | ・入力 SQL の Snowflake 構文パース失敗 (`ParseError`)<br>・対象ファイル不存在 / 読み込み・書き込み権限不足 | SQL の構文修正、またはファイルパスの存在確認。 |
 
 ### 6.2 Fail-Safe 設計 & 自動フォールバック
 1. **AST 破壊の完全防止**:
-   - LLM が生成した SQL スニペットは、構文木への結合前に必ず `sqlglot.parse_one(snippet, dialect=dialect)` で事前検証される。
-   - パース失敗や構文エラーが発生した場合は該当箇所の置換を中断し、元の AST ノードを 100% 維持してフェイルセーフに処理を継続する。
+   - 外部エージェントや置換ルールによって生成された SQL 断片は、元テキストへの結合前に必ず `sqlglot.parse_one(snippet, dialect=dialect)` で事前検証される。
+   - パース失敗や構文エラーが発生した場合は該当箇所の置換を中断し、元のコード断片を 100% 維持してフェイルセーフに処理を継続する。
 2. **TextSplicer の安全フォールバック**:
-   - コメントやインデントを保持するソーススプライシングにおいて、行・列オフセットの一致が曖昧な場合は、安全にクエリ全体の再フォーマット出力（`ast.to_sql()`）へとフォールバックする。
+   - コメントやインデントを保持するソーススプライシングにおいて、行・列オフセットの一致が曖昧な場合は、元ファイルを破壊せず安全にエラー終了または警告出力する。
 
 ### 6.3 Actionable Advice UX (自己修復ループ)
 - エラー発生時は単なるスタックトレースを出力せず、問題の根本原因と**即座に実行可能な修正コマンド**を Rich パネルまたは黄色文字（stderr）で提示する：
-  - Gemini API キー未設定時: `cmdkey /generic:icepick:gemini_api_key ...` および `--provider vertex` への切り替え案内を出力。
-  - Vertex AI 認証未設定時: `gcloud auth application-default login` および `gcp_project` 設定案内を出力。
-  - 不正引数時: サポートされている選択肢の一覧（例: `['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']`）を出力。
+  - 不正引数時: サポートされている選択肢の一覧（例: `['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']`、`['text', 'json']`）を出力。
+  - 無効な処方箋ID指定時: 利用可能な有効処方箋ID一覧（例: `Available IDs: RX-001, RX-002`）を出力。
+  - 非TTY環境での `fix`: `--force` を付与したコマンド例を出力。
 
 ### 6.4 非対話環境（CI / Agent）でのハングアップ防止
 - `fix` コマンド等において、非 TTY 環境（パイプ入力やエージェント実行環境）でファイル直接更新を行う場合、予期せぬ破壊を防ぐため `--force` フラグの指定を必須とし、未指定時は直ちに終了コード 1 で安全にフェイルする。
