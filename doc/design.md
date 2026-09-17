@@ -77,7 +77,7 @@ flowchart TD
     CmdDiag --> Parser["icepick.parser.SQLParser"]
     Parser --> AST["Snowflake Root AST"]
     AST --> Linter["icepick.linter.LinterEngine"]
-    Linter --> Rules["Rules (SNOW-001 ~ SNOW-011)"]
+    Linter --> Rules["Rules (SNOW-001 ~ SNOW-012)"]
     Rules --> Issues["List[DiagnosticIssue]"]
     Issues --> RxEngine["icepick.prescription.PrescriptionEngine"]
     RxEngine --> Plan["PrescriptionPlan (RX-001, RX-002...)"]
@@ -168,7 +168,7 @@ class PrescriptionPlan:
 ## 機能詳細
 
 ### 4.1 `LinterEngine` (`icepick/linter/`)
-- 対応要件: A-1, A-2, A-3, A-4, A-5, A-6, A-7, A-8, A-9, A-10, A-11, A-12
+- 対応要件: A-1, A-2, A-3, A-4, A-5, A-6, A-7, A-8, A-9, A-10, A-11, A-12, A-13
 - `BaseRule` を継承した個別ルールクラスを動的にロードして実行する。
 - 各ルールは `check(ast: exp.Expression) -> List[DiagnosticIssue]` を実装する。
 - 個別ルール一覧:
@@ -191,6 +191,18 @@ class PrescriptionPlan:
   - `QualifyFlatteningRule` (`SNOW-009`): ウィンドウ関数を持つサブクエリを外側 `WHERE` 句（`rn = 1` 等）で囲んでいる構造を検出し、サブクエリを解消して内側クエリに `QUALIFY` 条件を注入した置換ノードをセット。
   - `CteMultiReferenceRule` (`SNOW-010`): 同一 CTE が 3 回以上参照されている箇所を検知し、一時テーブル（TEMPORARY TABLE）マテリアライズ検討を促す警告（重要度 `LOW`、手動対応）を発行。
   - `HugeInListRule` (`SNOW-011`): IN 句の引数リストが 500 要素を超えるリテラル集合を検知し、`ARRAY_CONSTRUCT` や一時テーブル JOIN を促す警告（重要度 `MEDIUM`、手動対応）を発行。
+  - `SelectStarRule` (`SNOW-012`): 中間 CTE、JOIN 句を伴う SELECT、または DISTINCT を伴う SELECT での `exp.Star` 射影を検知し、必要カラム指定を促す警告（重要度 `LOW`、手動/エージェント対応）を発行。
+    - **入力 (Input)**: AST (`exp.Expression`)
+    - **処理 (Processing)**:
+      1. 全 `exp.Select` ノードを走査。
+      2. 各 `Select` の射影式リスト（`select.expressions`）内に `exp.Star`（または `exp.Column` の this が `exp.Star`）が存在するか判定。
+      3. 集計関数（`exp.Count` や `exp.AggFunc`）内部の `Star` は行数カウント用途として除外。
+      4. 以下のいずれかの高リスク条件を満たす場合に `DiagnosticIssue` を発行:
+         a. 当該 `Select` が CTE 定義内部（`select.find_ancestor(exp.CTE)`）にある（中間 CTE による全列パイプライン引き回し）。
+         b. 当該 `Select` が `JOIN` 句（`select.args.get("joins")`）を持っている（複数テーブル全列展開によるメモリ膨張）。
+         c. 当該 `Select` が `DISTINCT` 属性を持っている（全列ハッシュ/ソートによる Spill リスク）。
+      5. `target_node = star_node`, `suggested_replacement = None`（手動/エージェントによるリライト推奨）。
+    - **出力 (Output)**: `list[DiagnosticIssue]` (重要度: LOW, 自動置換: なし / 手動・Agent推奨)
 
 ### 4.2 `ASTPatcher` & `SubqueryToCTE` (`icepick/patcher/`)
 - 対応要件: B-1, B-2, B-4, B-5, B-6, B-7

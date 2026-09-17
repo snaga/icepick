@@ -9,7 +9,7 @@
 - **診断結果の標準化 (`base.DiagnosticIssue`, `base.Severity`)**:
   - 問題の深刻度、対象 AST ノード、コードスニペット、置換案ノード、LLM 依存フラグを構造化データとして保持する。
 - **プラグイン拡張性 & フィルタリング**:
-  - `BaseRule` を継承した個別ルール（`SNOW-001`〜`SNOW-011` 等）を `LinterEngine` に動的に登録可能。
+  - `BaseRule` を継承した個別ルール（`SNOW-001`〜`SNOW-012` 等）を `LinterEngine` に動的に登録可能。
   - `icepick.config.Config` に従い、有効化・無効化されたルールのみをフィルタリングして実行する。
 
 ## 2. 依存関係の制約 (Dependency Constraints)

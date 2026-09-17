@@ -15,6 +15,7 @@
 - **`SNOW-009` (`snow_009_qualify_flattening.py`)**: ウィンドウ関数サブクエリの検出と Snowflake ネイティブ `QUALIFY` 句への自動平坦化。
 - **`SNOW-010` (`snow_010_cte_multi_reference.py`)**: 同一 CTE の多重参照（3回以上）検出と一時テーブル（TEMPORARY TABLE）マテリアライズ検討警告。
 - **`SNOW-011` (`snow_011_huge_in_list.py`)**: 巨大 IN リスト（500要素超）検出とコンパイル過負荷回避のためのリライト警告。
+- **`SNOW-012` (`snow_012_select_star.py`)**: 中間 CTE や JOIN における不要な全列展開（`SELECT *`）検出とカラム指定リライト警告。
 
 ## 2. 独立性と依存関係の制約 (Independence & Constraints)
 - **完全な独立性**:
