@@ -11,6 +11,7 @@ from icepick.linter.rules.snow_008_redundant_distinct import RedundantDistinctRu
 from icepick.linter.rules.snow_009_qualify_flattening import QualifyFlatteningRule
 from icepick.linter.rules.snow_010_cte_multi_reference import CteMultiReferenceRule
 from icepick.linter.rules.snow_011_huge_in_list import HugeInListRule
+from icepick.linter.rules.snow_012_select_star import SelectStarRule
 
 __all__ = [
     "CorrelatedSubqueryRule",
@@ -23,6 +24,7 @@ __all__ = [
     "QualifyFlatteningRule",
     "RedundantDistinctRule",
     "RedundantSortRule",
+    "SelectStarRule",
     "UnionToUnionAllRule",
 ]
 
