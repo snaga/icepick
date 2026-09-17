@@ -135,7 +135,7 @@ class TestAgentContextUnit:
         assert commands["verify"]["options"]["--dialect"]["choices"] == expected_dialects
 
     def test_rules_coverage(self) -> None:
-        """Verify that all rules from SNOW-001 to SNOW-007 are cataloged."""
+        """Verify that all rules from SNOW-001 to SNOW-011 are cataloged."""
         ctx = get_agent_context()
         rules = ctx["rules"]
         rule_ids = {r["id"] for r in rules}
@@ -148,6 +148,10 @@ class TestAgentContextUnit:
             "SNOW-005",
             "SNOW-006",
             "SNOW-007",
+            "SNOW-008",
+            "SNOW-009",
+            "SNOW-010",
+            "SNOW-011",
         }
         assert expected_rule_ids.issubset(rule_ids)
 
@@ -195,6 +199,26 @@ class TestAgentContextUnit:
         assert snow_007["can_auto_fix"] is True
         assert snow_007["severity"] == "MEDIUM"
 
+        snow_008 = next(r for r in rules if r["id"] == "SNOW-008")
+        assert snow_008["name"] == "RedundantDistinctRule"
+        assert snow_008["can_auto_fix"] is True
+        assert snow_008["severity"] == "LOW"
+
+        snow_009 = next(r for r in rules if r["id"] == "SNOW-009")
+        assert snow_009["name"] == "QualifyFlatteningRule"
+        assert snow_009["can_auto_fix"] is True
+        assert snow_009["severity"] == "MEDIUM"
+
+        snow_010 = next(r for r in rules if r["id"] == "SNOW-010")
+        assert snow_010["name"] == "CteMultiReferenceRule"
+        assert snow_010["can_auto_fix"] is False
+        assert snow_010["severity"] == "LOW"
+
+        snow_011 = next(r for r in rules if r["id"] == "SNOW-011")
+        assert snow_011["name"] == "HugeInListRule"
+        assert snow_011["can_auto_fix"] is False
+        assert snow_011["severity"] == "MEDIUM"
+
     def test_environment_variables_schema(self) -> None:
         """Verify that environment variables expose supported ICEPICK_ config vars."""
         ctx = get_agent_context()
@@ -228,7 +252,7 @@ class TestAgentContextCli:
 
         parsed = json.loads(result.output)
         assert parsed["name"] == "icepick"
-        assert len(parsed["rules"]) >= 7
+        assert len(parsed["rules"]) >= 11
 
     def test_agent_context_no_json(self) -> None:
         """Verify agent-context --no-json exits with 0 and prints human-readable summary."""

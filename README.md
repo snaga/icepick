@@ -56,6 +56,10 @@ Snowflake 上で稼働する夜間バッチや dbt モデルなどの複雑な S
 | **`SNOW-005`** | **Duplicate Table Scan** | `MEDIUM` | ⚠️ (手動/Agent) | 同一クエリ内の複数 CTE 間で同一ベーステーブルが重複スキャンされている箇所を検知し、共通 CTE 集約を推奨。 |
 | **`SNOW-006`** | **Union to Union All** | `LOW` | ✅ | 重複排除が不要な `UNION` を検知し、ソート負荷を排除する `UNION ALL` へ自動置換。連鎖 UNION にも完全対応。 |
 | **`SNOW-007`** | **Inline Subquery in FROM/JOIN** | `MEDIUM` | ✅ | FROM 句や JOIN 句に直接埋め込まれた派生テーブルを検知し、トップレベル CTE への抽出・平坦化を推奨。 |
+| **`SNOW-008`** | **Redundant DISTINCT with GROUP BY / Aggregation** | `LOW` | ✅ | `GROUP BY` 句または集計関数が存在するクエリブロックでの冗長な `DISTINCT`（二重ソート・メモリSpill要因）を検知し、安全に削除（`pop()`）。 |
+| **`SNOW-009`** | **Window Function Flattening to QUALIFY** | `MEDIUM` | ✅ | 外側 `WHERE` 句でウィンドウ関数の結果エイリアスを絞り込んでいるサブクエリを検知し、Snowflake ネイティブの `QUALIFY` 句を用いた単一クエリへ自動平坦化。 |
+| **`SNOW-010`** | **CTE Multiple References (Materialization Warning)** | `LOW` | ⚠️ (手動/Agent) | 同一クエリ内で 3 回以上参照される CTE（インライン再計算とメモリSpill要因）を検知し、`CREATE TEMPORARY TABLE` へのマテリアライズ検討を警告。 |
+| **`SNOW-011`** | **Huge IN-List Optimizer Overload** | `MEDIUM` | ⚠️ (手動/Agent) | 500 要素を超える巨大なリテラル IN リスト（Snowflake オプティマイザのコンパイル遅延要因）を検知し、`ARRAY_CONSTRUCT` や一時テーブル JOIN へのリライトを警告。 |
 
 ---
 
@@ -73,7 +77,7 @@ flowchart TD
     CmdDiag --> Parser["icepick.parser.SQLParser"]
     Parser --> AST["Snowflake Root AST"]
     AST --> Linter["icepick.linter.LinterEngine"]
-    Linter --> Rules["Rules (SNOW-001 ~ SNOW-007)"]
+    Linter --> Rules["Rules (SNOW-001 ~ SNOW-011)"]
     Rules --> Issues["List[DiagnosticIssue]"]
     Issues --> RxEngine["icepick.prescription.PrescriptionEngine"]
     RxEngine --> Plan["PrescriptionPlan (RX-001, RX-002...)"]

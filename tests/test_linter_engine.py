@@ -3,7 +3,7 @@
 from sqlglot import exp
 
 from icepick.config import Config
-from icepick.linter import BaseRule, DiagnosticIssue, LinterEngine, Severity
+from icepick.linter import DEFAULT_RULES, BaseRule, DiagnosticIssue, LinterEngine, Severity
 from icepick.parser import parse_snowflake_sql
 
 
@@ -207,3 +207,27 @@ def test_linter_engine_clean_query() -> None:
     engine = LinterEngine(rules=[DummySargableRule(), DummyRedundantSortRule()])
     issues = engine.diagnose(ast)
     assert issues == []
+
+
+def test_linter_engine_default_rules() -> None:
+    """Test LinterEngine initializes with all 11 default rules when none are provided."""
+    engine = LinterEngine()
+    assert len(engine.rules) == 11
+    assert len(DEFAULT_RULES) == 11
+
+    rule_ids = {rule.rule_id for rule in engine.rules}
+    expected_ids = {
+        "SNOW-001",
+        "SNOW-002",
+        "SNOW-003",
+        "SNOW-004",
+        "SNOW-005",
+        "SNOW-006",
+        "SNOW-007",
+        "SNOW-008",
+        "SNOW-009",
+        "SNOW-010",
+        "SNOW-011",
+    }
+    assert rule_ids == expected_ids
+

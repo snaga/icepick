@@ -15,13 +15,6 @@ from icepick.config import Config
 from icepick.diff.formatter import format_diff
 from icepick.linter.base import DiagnosticIssue, Severity
 from icepick.linter.engine import LinterEngine
-from icepick.linter.rules.snow_001_sargable import NonSargableRule
-from icepick.linter.rules.snow_002_correlated import CorrelatedSubqueryRule
-from icepick.linter.rules.snow_003_sort import RedundantSortRule
-from icepick.linter.rules.snow_004_implicit_cross_join import ImplicitCrossJoinRule
-from icepick.linter.rules.snow_005_duplicate_scan import DuplicateTableScanRule
-from icepick.linter.rules.snow_006_union import UnionToUnionAllRule
-from icepick.linter.rules.snow_007_nested_subquery import NestedSubqueryRule
 from icepick.patcher.splicer import TextSplicer
 from icepick.prescription.models import (
     Prescription,
@@ -41,13 +34,17 @@ RULE_IMPACT_MAP: dict[str, str] = {
     "SNOW-005": "Minimizes I/O and remote storage reads by reusing scanned data via CTE",
     "SNOW-006": "Eliminates distinct sort overhead when duplicate rows are impossible or acceptable",
     "SNOW-007": "Flattens nested subqueries into CTEs for better readability and optimization",
+    "SNOW-008": "Eliminates redundant deduplication sorting in aggregation query; reduces query memory spill.",
+    "SNOW-009": "Flattens nested subquery using native QUALIFY clause; improves optimizer efficiency and readability.",
+    "SNOW-010": "Avoids redundant CTE inlining re-computations and memory spills; consider TEMPORARY TABLE materialization.",
+    "SNOW-011": "Prevents Snowflake optimizer compilation overload from huge literal list; consider ARRAY_CONSTRUCT or temporary table.",
 }
 
 DEFAULT_IMPACT = "Improves query execution performance and resource efficiency"
 
 
 def create_default_linter_engine(config: Config | None = None) -> LinterEngine:
-    """Create and configure a LinterEngine with all standard SNOW rules (001-007).
+    """Create and configure a LinterEngine with all standard SNOW rules (001-011).
 
     Args:
         config: Optional configuration instance.
@@ -55,15 +52,7 @@ def create_default_linter_engine(config: Config | None = None) -> LinterEngine:
     Returns:
         LinterEngine: Populated linter engine instance.
     """
-    engine = LinterEngine(config=config)
-    engine.register_rule(NonSargableRule())
-    engine.register_rule(CorrelatedSubqueryRule())
-    engine.register_rule(RedundantSortRule())
-    engine.register_rule(ImplicitCrossJoinRule())
-    engine.register_rule(DuplicateTableScanRule())
-    engine.register_rule(UnionToUnionAllRule())
-    engine.register_rule(NestedSubqueryRule())
-    return engine
+    return LinterEngine(config=config)
 
 
 class PrescriptionEngine:
@@ -82,7 +71,7 @@ class PrescriptionEngine:
 
         Args:
             linter_engine: Underlying LinterEngine for rule evaluation.
-                If None, a default LinterEngine loaded with SNOW-001 through SNOW-007 is created.
+                If None, a default LinterEngine loaded with SNOW-001 through SNOW-011 is created.
             dialect: SQL dialect for parsing and generating code snippets (default: 'snowflake').
         """
         self.linter_engine: LinterEngine = (

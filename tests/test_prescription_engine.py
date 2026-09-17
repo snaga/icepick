@@ -186,3 +186,13 @@ class TestPrescriptionEngine:
 
         with pytest.raises(ParseError):
             engine.diagnose(bad_sql)
+
+    def test_rule_impact_map_all_rules_covered(self) -> None:
+        """Verify RULE_IMPACT_MAP contains expected impacts for all 11 SNOW rules."""
+        from icepick.prescription.engine import RULE_IMPACT_MAP
+
+        expected_ids = [f"SNOW-{i:03d}" for i in range(1, 12)]
+        for rule_id in expected_ids:
+            assert rule_id in RULE_IMPACT_MAP
+            assert len(RULE_IMPACT_MAP[rule_id]) > 0
+

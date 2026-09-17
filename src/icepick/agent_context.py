@@ -294,6 +294,34 @@ def get_agent_context() -> dict[str, Any]:
                 "description": "Detects deeply nested inline derived tables in FROM or JOIN clauses that should be extracted to top-level CTEs.",
                 "can_auto_fix": True,
             },
+            {
+                "id": "SNOW-008",
+                "name": "RedundantDistinctRule",
+                "severity": "LOW",
+                "description": "Detects redundant DISTINCT in SELECT statements with GROUP BY or aggregation functions.",
+                "can_auto_fix": True,
+            },
+            {
+                "id": "SNOW-009",
+                "name": "QualifyFlatteningRule",
+                "severity": "MEDIUM",
+                "description": "Detects nested subqueries wrapping window functions filtered by outer WHERE clause, flattens to QUALIFY clause.",
+                "can_auto_fix": True,
+            },
+            {
+                "id": "SNOW-010",
+                "name": "CteMultiReferenceRule",
+                "severity": "LOW",
+                "description": "Detects CTEs referenced 3 or more times causing redundant inlining re-computations and memory spills.",
+                "can_auto_fix": False,
+            },
+            {
+                "id": "SNOW-011",
+                "name": "HugeInListRule",
+                "severity": "MEDIUM",
+                "description": "Detects huge IN-lists exceeding 500 literals overloading Snowflake query compilation and memory.",
+                "can_auto_fix": False,
+            },
         ],
         "environment_variables": {
             "ICEPICK_DIALECT": {

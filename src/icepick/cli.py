@@ -25,15 +25,6 @@ from icepick.exceptions import ParseError
 from icepick.feedback import FeedbackRecorder
 from icepick.linter.base import Severity
 from icepick.linter.engine import LinterEngine
-from icepick.linter.rules import (
-    CorrelatedSubqueryRule,
-    DuplicateTableScanRule,
-    ImplicitCrossJoinRule,
-    NestedSubqueryRule,
-    NonSargableRule,
-    RedundantSortRule,
-    UnionToUnionAllRule,
-)
 from icepick.prescription import PrescriptionEngine, PrescriptionPlan
 from icepick.verifier.equivalence import generate_verification_sql
 
@@ -122,15 +113,7 @@ def _load_config(
 
 def _create_engine(cfg: Config) -> LinterEngine:
     """Create and configure LinterEngine with default rules."""
-    engine = LinterEngine(config=cfg)
-    engine.register_rule(NonSargableRule())
-    engine.register_rule(CorrelatedSubqueryRule())
-    engine.register_rule(RedundantSortRule())
-    engine.register_rule(ImplicitCrossJoinRule())
-    engine.register_rule(DuplicateTableScanRule())
-    engine.register_rule(UnionToUnionAllRule())
-    engine.register_rule(NestedSubqueryRule())
-    return engine
+    return LinterEngine(config=cfg)
 
 
 @app.command("diag")

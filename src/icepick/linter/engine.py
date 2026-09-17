@@ -12,6 +12,33 @@ from sqlglot import exp
 
 from icepick.config import Config
 from icepick.linter.base import BaseRule, DiagnosticIssue
+from icepick.linter.rules import (
+    CorrelatedSubqueryRule,
+    CteMultiReferenceRule,
+    DuplicateTableScanRule,
+    HugeInListRule,
+    ImplicitCrossJoinRule,
+    NestedSubqueryRule,
+    NonSargableRule,
+    QualifyFlatteningRule,
+    RedundantDistinctRule,
+    RedundantSortRule,
+    UnionToUnionAllRule,
+)
+
+DEFAULT_RULES: tuple[type[BaseRule], ...] = (
+    NonSargableRule,
+    CorrelatedSubqueryRule,
+    RedundantSortRule,
+    ImplicitCrossJoinRule,
+    DuplicateTableScanRule,
+    UnionToUnionAllRule,
+    NestedSubqueryRule,
+    RedundantDistinctRule,
+    QualifyFlatteningRule,
+    CteMultiReferenceRule,
+    HugeInListRule,
+)
 
 
 class LinterEngine:
@@ -30,10 +57,14 @@ class LinterEngine:
         """Initialize LinterEngine with rules and optional configuration.
 
         Args:
-            rules: Initial sequence of rules to register.
+            rules: Initial sequence of rules to register. If None, all default rules
+                defined in DEFAULT_RULES are registered.
             config: Icepick Config instance (defaults to default Config()).
         """
-        self.rules: list[BaseRule] = list(rules) if rules is not None else []
+        if rules is not None:
+            self.rules: list[BaseRule] = list(rules)
+        else:
+            self.rules = [rule_cls() for rule_cls in DEFAULT_RULES]
         self.config: Config = config or Config()
 
     def register_rule(self, rule: BaseRule) -> None:
