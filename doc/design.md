@@ -77,7 +77,7 @@ flowchart TD
     CmdDiag --> Parser["icepick.parser.SQLParser"]
     Parser --> AST["Snowflake Root AST"]
     AST --> Linter["icepick.linter.LinterEngine"]
-    Linter --> Rules["Rules (SNOW-001 ~ SNOW-007)"]
+    Linter --> Rules["Rules (SNOW-001 ~ SNOW-011)"]
     Rules --> Issues["List[DiagnosticIssue]"]
     Issues --> RxEngine["icepick.prescription.PrescriptionEngine"]
     RxEngine --> Plan["PrescriptionPlan (RX-001, RX-002...)"]
@@ -168,7 +168,7 @@ class PrescriptionPlan:
 ## 機能詳細
 
 ### 4.1 `LinterEngine` (`icepick/linter/`)
-- 対応要件: A-1, A-2, A-3, A-4, A-5, A-6, A-7, A-8
+- 対応要件: A-1, A-2, A-3, A-4, A-5, A-6, A-7, A-8, A-9, A-10, A-11, A-12
 - `BaseRule` を継承した個別ルールクラスを動的にロードして実行する。
 - 各ルールは `check(ast: exp.Expression) -> List[DiagnosticIssue]` を実装する。
 - 個別ルール一覧:
@@ -256,9 +256,11 @@ class PrescriptionPlan:
       - `dialect`: SQL 方言（デフォルト: `"snowflake"`）
     - **Processing**:
       1. 各 Issue の `target_node` の SQL 表現および行位置情報から、`original_sql` 内の対応する生テキスト断片（行・文字範囲）を特定。
-      2. 元の行のインデント（先行空白・タブ）を検出し、置換先コード（`suggested_replacement.sql(...)` または LLM 生成コード）のインデントを元のコンテキストに合わせて整形。
-      3. 患部以外の 95% 以上のテキスト（コメント、空行、インデント、キーワードの大文字小文字）を 1 文字も改変することなく、患部のみをピンポイント差し替えした一時バッファ `modified_raw_sql` を構築。
-      4. `format_diff(original_sql, modified_raw_sql, normalize=False)` を実行し、元の生ファイルに対する完全一致 Unified Diff を生成。
+      2. **コメント誤爆防止**: 単一行コメント（`--`）およびブロックコメント（`/* ... */`）の文字スパンを事前に走査・特定し、コメント内部に含まれるキーワード（例: `-- SNOW-008: DISTINCT`）を置換対象マッチングから除外。
+      3. **オプショナル AS 対応**: sqlglot と元コード間での `AS` キーワード有無の差異を許容するため、`(?:\bAS\s+)?` を用いた柔軟な正規表現パターンマッチングを実施（例: `) AS sub` と `) sub` の相互マッチ）。
+      4. 元の行のインデント（先行空白・タブ）を検出し、置換先コード（`suggested_replacement.sql(...)` または外部リライトコード）のインデントを元のコンテキストに合わせて整形。
+      5. 患部以外の 95% 以上のテキスト（コメント、空行、インデント、キーワードの大文字小文字）を 1 文字も改変することなく、患部のみをピンポイント差し替えした一時バッファ `modified_raw_sql` を構築。
+      6. `format_diff(original_sql, modified_raw_sql, normalize=False)` を実行し、元の生ファイルに対する完全一致 Unified Diff を生成。
     - **Output**:
       - `modified_raw_sql`: 患部のみが置換され、元コードの書式が 100% 維持された SQL 文字列
       - `diff_text`: 元ファイルにそのまま適用可能な、コンテキスト行が完全一致する最小限の Unified Diff

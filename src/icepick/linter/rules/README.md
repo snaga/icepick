@@ -5,9 +5,16 @@
 
 現在および今後のルール一覧：
 - **`SNOW-001` (`snow_001_sargable.py`)**: Non-Sargable WHERE 句（カラムの関数ラップ）の検出と範囲条件へのリライト提示。
-- **`SNOW-002` (`snow_002_correlated.py`)**: 相関副クエリの検出（LLM リライト対象フラグ付け）。
+- **`SNOW-002` (`snow_002_correlated.py`)**: 相関副クエリの検出（外部AIエージェント連携 / 手動リライト推奨）。
 - **`SNOW-003` (`snow_003_sort.py`)**: サブクエリ/CTE 内の不要な ORDER BY の検出と削除提示。
-- **`SNOW-004`〜`SNOW-007`**: 暗黙 CROSS JOIN、重複スキャン、UNION ALL 最適化、インラインサブクエリ CTE 平坦化。
+- **`SNOW-004` (`snow_004_implicit_cross_join.py`)**: 暗黙 CROSS JOIN（カンマ区切りFROM）の検出と明示的JOINへのリライト提示。
+- **`SNOW-005` (`snow_005_duplicate_scan.py`)**: 複数CTE間での同一ベーステーブル重複スキャンの検出。
+- **`SNOW-006` (`snow_006_union.py`)**: 重複排除不要な UNION から UNION ALL への置換提示。
+- **`SNOW-007` (`snow_007_nested_subquery.py`)**: FROM/JOIN句内のインラインサブクエリ検出とトップレベルCTE昇格提示。
+- **`SNOW-008` (`snow_008_redundant_distinct.py`)**: GROUP BY / 集計関数ブロック内の冗長 DISTINCT 検出と自動削除（`pop()`）提示。
+- **`SNOW-009` (`snow_009_qualify_flattening.py`)**: ウィンドウ関数サブクエリの検出と Snowflake ネイティブ `QUALIFY` 句への自動平坦化。
+- **`SNOW-010` (`snow_010_cte_multi_reference.py`)**: 同一 CTE の多重参照（3回以上）検出と一時テーブル（TEMPORARY TABLE）マテリアライズ検討警告。
+- **`SNOW-011` (`snow_011_huge_in_list.py`)**: 巨大 IN リスト（500要素超）検出とコンパイル過負荷回避のためのリライト警告。
 
 ## 2. 独立性と依存関係の制約 (Independence & Constraints)
 - **完全な独立性**:

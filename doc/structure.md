@@ -43,7 +43,11 @@ Snowflake_Query_Optimizer_PoC/
 │       │       ├── snow_004_implicit_cross_join.py # 暗黙クロス結合
 │       │       ├── snow_005_duplicate_scan.py      # 重複テーブルスキャン
 │       │       ├── snow_006_union.py               # UNION vs UNION ALL
-│       │       └── snow_007_nested_subquery.py     # インラインDerived Table
+│       │       ├── snow_007_nested_subquery.py     # インラインDerived Table
+│       │       ├── snow_008_redundant_distinct.py    # 冗長DISTINCT削除
+│       │       ├── snow_009_qualify_flattening.py     # ウィンドウ関数のQUALIFY平坦化
+│       │       ├── snow_010_cte_multi_reference.py    # CTE多重参照警告
+│       │       └── snow_011_huge_in_list.py           # 巨大INリスト警告
 │       ├── patcher/            # AST In-place置換エンジン
 │       │   ├── __init__.py
 │       │   ├── in_place.py     # ASTPatcher (node.replace / node.pop)
@@ -65,6 +69,10 @@ Snowflake_Query_Optimizer_PoC/
 │   ├── test_parser.py
 │   ├── test_linter_engine.py
 │   ├── test_rules_*.py         # 各ルール別テスト
+│   ├── test_rules_redundant_distinct.py
+│   ├── test_rules_qualify.py
+│   ├── test_rules_cte_multi_reference.py
+│   ├── test_rules_huge_in_list.py
 │   ├── test_prescription_engine.py # 処方箋診断テスト
 │   ├── test_prescription_diff.py   # 処方箋ID選択Diffテスト
 │   ├── test_prescription_fix.py    # 処方箋インプレース適用テスト
@@ -89,7 +97,7 @@ Snowflake_Query_Optimizer_PoC/
 - **クラス名**: `PascalCase` (例: `LinterEngine`, `PrescriptionEngine`, `EquivalenceVerifier`)
 - **関数・メソッド名**: `snake_case()` (例: `generate_verification_sql()`, `diagnose()`)
 - **定数名**: `UPPER_SNAKE_CASE` (例: `VALID_DIALECTS`, `RULE_IMPACT_MAP`)
-- **ルールID**: `SNOW-XXX` (3桁の連番プレフィックス: `SNOW-001` 〜 `SNOW-007`)
+- **ルールID**: `SNOW-XXX` (3桁の連番プレフィックス: `SNOW-001` 〜 `SNOW-011`)
 
 ## 🏗️ アーキテクチャの方針
 - **単一責任の原則 (SRP)**:
