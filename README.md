@@ -4,7 +4,7 @@
 抽象構文木（AST）に基づく決定論的静的診断と外科手術的局所パッチにより、クエリのセマンティクス（結果の等価性）を壊すことなく、Snowflakeの巨大バッチクエリを安全かつ爆速に最適化する開発者向けCLIツール。
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Coverage](https://img.shields.io/badge/Coverage-100%25-brightgreen.svg)]()
+[![Coverage](https://img.shields.io/badge/Coverage-93%25-brightgreen.svg)]()
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-strict-blue)](https://mypy-lang.org/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -13,7 +13,7 @@
 
 ## 🌟 なぜ Icepick なのか？ (Why Icepick?)
 
-Snowflake 上で稼働する夜間バッチや dbt モデルなどの複雑な SQL クエリ（数百〜数千行の CTE 連鎖）は、パーティションプルーニングの阻害やメモリ溢れ（Spill）により、膨大なコンピュートコストと実行時間を浪費しがちです。
+Snowflake 上で稼働する夜間バッチや dbt-snowflake モデルなどの複雑な SQL クエリ（数百〜数千行の CTE 連鎖）は、マイクロパーティション枝刈り（Pruning）の阻害やメモリ溢れ（Remote Disk Spill）により、過剰なウェアハウスサイズへのスケールアップを強いられ、膨大なクレジットコストと実行時間を浪費しがちです。
 
 従来の「クエリ全体をそのまま LLM に丸投げするアプローチ」には、以下のような深刻な課題がありました：
 
@@ -153,6 +153,11 @@ Prescription Plan: 2 optimization prescriptions found in models/batch_mart.sql
 │ Rationale: Redundant ORDER BY in CTE 'sorted_base' without LIMIT/FETCH...   │
 │ Expected Impact: Eliminates sorting overhead and potential spilling...       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+最適化の必要がないクリーンなクエリの場合は、クリーンメッセージが出力されます：
+```text
+[OK] No optimization issues found in models/clean_mart.sql. Clean query!
 ```
 
 #### 重要度フィルタリング (`--severity` / `-s`)
@@ -401,18 +406,18 @@ icepick config show
 ```
 
 ```text
-                Icepick Resolved Configuration               
-┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
-┃ Option              ┃ Resolved Value      ┃ Source       ┃
-┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
-│ dialect             │ snowflake           │ default      │
-│ disabled_rules      │ []                  │ default      │
-│ enabled_rules       │ []                  │ default      │
-│ interactive         │ False               │ default      │
-│ output_patch        │ (none)              │ default      │
-│ show_diff           │ True                │ default      │
-│ write_in_place      │ False               │ default      │
-└─────────────────────┴─────────────────────┴──────────────┘
+            Icepick Resolved Configuration             
++-----------------------------------------------------+
+| Option         | Resolved Value | Source  | Secret? |
+|----------------+----------------+---------+---------|
+| dialect        | snowflake      | default |   No    |
+| disabled_rules | []             | default |   No    |
+| enabled_rules  | []             | default |   No    |
+| interactive    | False          | default |   No    |
+| output_patch   | (none)         | default |   No    |
+| show_diff      | True           | default |   No    |
+| write_in_place | False          | default |   No    |
++-----------------------------------------------------+
 ```
 
 機械可読な JSON 出力もサポート：
@@ -449,7 +454,7 @@ disabled_rules = ["SNOW-007"]
 #### 設定キー一覧
 | キー名 | 型 | デフォルト値 | 説明 |
 | :--- | :---: | :---: | :--- |
-| `dialect` | `string` | `"snowflake"` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) |
+| `dialect` | `string` | `"snowflake"` | 対象 SQL 方言（デフォルト: `"snowflake"`。Snowflake SQL 構文に完全特化） |
 | `enabled_rules` | `array[string]` | `[]` | 実行するルールIDのホワイトリスト。空の場合は無効化されていない全ルールを実行。 |
 | `disabled_rules` | `array[string]` | `[]` | スキップするルールIDのブラックリスト（例: `["SNOW-007"]`）。 |
 | `interactive` | `boolean` | `false` | 対話形式で変更確認プロンプトを出すか。 |
@@ -473,7 +478,7 @@ icepick diff models/batch_mart.sql -c .icepick.toml
 設定ファイルを使わない場合や、CI 環境で一時的に上書きしたい場合は環境変数も利用可能です。
 | 設定項目 / 環境変数 | 説明 | デフォルト値 |
 | :--- | :--- | :--- |
-| `ICEPICK_DIALECT` | 対象 SQL 方言 (`snowflake`, `postgres`, `duckdb`, `bigquery`) | `snowflake` |
+| `ICEPICK_DIALECT` | 対象 SQL 方言（デフォルト: `snowflake`） | `snowflake` |
 | `ICEPICK_ENABLED_RULES` | 有効化するルールID（カンマ区切り） | すべて有効 |
 | `ICEPICK_DISABLED_RULES` | 無効化するルールID（カンマ区切り） | なし |
 | `ICEPICK_INTERACTIVE` | 対話形式の確認プロンプト (`true`/`false`) | `false` |
@@ -485,7 +490,7 @@ icepick diff models/batch_mart.sql -c .icepick.toml
 
 ## 🧪 テストと品質保証
 
-Icepick は厳格なスペック駆動開発（SDD）およびテスト駆動開発（TDD）に基づき、**100% のテストカバレッジ** を維持して開発されています。
+Icepick は厳格なスペック駆動開発（SDD）およびテスト駆動開発（TDD）に基づき、**93%（目標 90% 以上維持・主要コアモジュール 100%）の超高テストカバレッジ** を維持して開発されています。
 
 ```bash
 # 全テスト実行 & カバレッジ測定

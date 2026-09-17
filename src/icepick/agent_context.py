@@ -332,7 +332,7 @@ def get_agent_context() -> dict[str, Any]:
         ],
         "environment_variables": {
             "ICEPICK_DIALECT": {
-                "description": "SQL dialect for parsing (e.g., 'snowflake', 'postgres'). Default: 'snowflake'.",
+                "description": "SQL dialect for parsing (default: 'snowflake').",
                 "required": False,
             },
             "ICEPICK_ENABLED_RULES": {
