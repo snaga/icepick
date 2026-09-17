@@ -14,6 +14,7 @@ from icepick.linter.base import DiagnosticIssue, Severity
 from icepick.linter.rules.snow_001_sargable import NonSargableRule
 from icepick.linter.rules.snow_003_sort import RedundantSortRule
 from icepick.linter.rules.snow_006_union import UnionToUnionAllRule
+from icepick.linter.rules.snow_008_redundant_distinct import RedundantDistinctRule
 from icepick.parser import parse_snowflake_sql
 from icepick.patcher.splicer import TextSplicer
 
@@ -250,3 +251,88 @@ def test_splice_crlf_newlines_preserved() -> None:
     assert ok is True
     assert "\r\n" in modified_sql
     assert "date(created_at) = '2026-09-01'" not in modified_sql
+
+
+def test_splicer_skips_comment_keyword() -> None:
+    """Verify splicer ignores keyword in line comment and deletes DISTINCT from SQL body."""
+    raw_sql = """-- SNOW-008: Redundant DISTINCT with GROUP BY
+SELECT DISTINCT
+    id,
+    COUNT(*)
+FROM emp
+GROUP BY id;
+"""
+    ast = parse_snowflake_sql(raw_sql)
+    issues = RedundantDistinctRule().check(ast)
+    assert len(issues) == 1
+    assert issues[0].rule_id == "SNOW-008"
+
+    splicer = TextSplicer()
+    modified_sql, ok = splicer.splice_issue(raw_sql, issues[0])
+    assert ok is True
+    # Verify the comment is 100% intact, not a single character removed
+    assert "-- SNOW-008: Redundant DISTINCT with GROUP BY\n" in modified_sql
+    # Verify DISTINCT in SQL body was removed
+    assert "SELECT\n" in modified_sql
+    assert "SELECT DISTINCT" not in modified_sql
+
+
+def test_splicer_skips_block_comment_keyword() -> None:
+    """Verify block comment containing DISTINCT is untouched while body DISTINCT is spliced."""
+    raw_sql = (
+        "/* Comment with DISTINCT inside */ SELECT DISTINCT id, COUNT(*) FROM emp GROUP BY id;"
+    )
+    ast = parse_snowflake_sql(raw_sql)
+    issues = RedundantDistinctRule().check(ast)
+    assert len(issues) == 1
+
+    splicer = TextSplicer()
+    modified_sql, ok = splicer.splice_issue(raw_sql, issues[0])
+    assert ok is True
+    assert "/* Comment with DISTINCT inside */" in modified_sql
+    assert "SELECT id, COUNT(*) FROM emp GROUP BY id;" in modified_sql
+
+
+def test_splicer_matches_optional_as() -> None:
+    """Verify pattern with AS keyword matches raw SQL without AS keyword."""
+    raw_sql = "SELECT * FROM (SELECT id FROM emp) sub WHERE rn = 1;"
+    # sqlglot transpile / target_node contains 'AS sub'
+    target_node = sqlglot.parse_one(
+        "SELECT * FROM (SELECT id FROM emp) AS sub WHERE rn = 1", read="snowflake"
+    )
+    replacement_node = sqlglot.parse_one(
+        "SELECT * FROM (SELECT id FROM emp) AS sub WHERE rn = 1 AND id > 0", read="snowflake"
+    )
+    assert isinstance(target_node, exp.Expression)
+    assert isinstance(replacement_node, exp.Expression)
+
+    issue = DiagnosticIssue(
+        rule_id="TEST-001",
+        rule_name="Optional AS Test",
+        severity=Severity.LOW,
+        description="Verify flexible AS matching",
+        target_node=target_node,
+        snippet=target_node.sql(dialect="snowflake"),
+        suggested_replacement=replacement_node,
+    )
+
+    splicer = TextSplicer()
+    modified_sql, ok = splicer.splice_issue(raw_sql, issue)
+    assert ok is True
+    assert "AND id > 0" in modified_sql
+
+
+def test_comment_spans_ignore_string_literals() -> None:
+    """Verify string literals containing comment delimiters are not treated as comments."""
+    from icepick.patcher.splicer import _extract_comment_spans, _is_in_comment
+
+    sql = "SELECT '-- not a comment' AS val, /* real comment */ 1;"
+    spans = _extract_comment_spans(sql)
+    assert len(spans) == 1
+    # Only '/* real comment */' should be recognized as a comment span
+    comment_text = sql[spans[0][0] : spans[0][1]]
+    assert comment_text == "/* real comment */"
+
+    lit_start = sql.find("'-- not a comment'")
+    lit_end = lit_start + len("'-- not a comment'")
+    assert not _is_in_comment(sql, lit_start, lit_end, spans)

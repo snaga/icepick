@@ -27,6 +27,14 @@ TOKEN_PATTERN = re.compile(
     r"(\S)",  # Any remaining non-whitespace character
 )
 
+# Regex to safely identify comment spans and string literals in raw SQL
+COMMENT_OR_LITERAL_PATTERN = re.compile(
+    r"('(?:''|[^'])*')|"  # 1: Single-quoted string literal
+    r'("(?:""|[^"])*")|'  # 2: Double-quoted identifier
+    r"((?:--|//)[^\r\n]*)|"  # 3: Single-line comment (-- or //)
+    r"(/\*[\s\S]*?\*/)",  # 4: Multi-line block comment
+)
+
 # Equivalent function names produced during AST transpilation vs raw source
 FUNCTION_EQUIVALENTS: dict[str, list[str]] = {
     "TO_DATE": ["TO_DATE", "DATE", "TRY_TO_DATE"],
@@ -35,6 +43,65 @@ FUNCTION_EQUIVALENTS: dict[str, list[str]] = {
     "TO_CHAR": ["TO_CHAR", "TO_VARCHAR"],
     "TO_TIMESTAMP": ["TO_TIMESTAMP", "TIMESTAMP"],
 }
+
+
+@dataclass(frozen=True)
+class _Token:
+    """Internal token representation for flexible regex pattern construction.
+
+    Attributes:
+        pattern: Regex pattern string for matching this token.
+        is_word: True if the token is an alphanumeric identifier or keyword.
+        is_as: True if the token represents the SQL 'AS' keyword.
+    """
+
+    pattern: str
+    is_word: bool
+    is_as: bool = False
+
+
+def _extract_comment_spans(sql: str) -> list[tuple[int, int]]:
+    """Extract character offset spans (start, end) of comments in SQL text.
+
+    Correctly ignores comment delimiters occurring inside single-quoted string
+    literals or double-quoted identifiers.
+
+    Args:
+        sql: Raw SQL text.
+
+    Returns:
+        list[tuple[int, int]]: List of (start, end) character offset tuples for comments.
+    """
+    comment_spans: list[tuple[int, int]] = []
+    for match in COMMENT_OR_LITERAL_PATTERN.finditer(sql):
+        if match.group(3) or match.group(4):
+            comment_spans.append((match.start(), match.end()))
+    return comment_spans
+
+
+def _is_in_comment(
+    sql: str,
+    start: int,
+    end: int,
+    comment_spans: Sequence[tuple[int, int]] | None = None,
+) -> bool:
+    """Check if a text span [start, end] intersects with any comment span in sql.
+
+    Args:
+        sql: Raw SQL text.
+        start: Start character offset.
+        end: End character offset.
+        comment_spans: Optional precomputed comment spans. If None, extracted from sql.
+
+    Returns:
+        bool: True if [start, end] intersects with any comment span, False otherwise.
+    """
+    if comment_spans is None:
+        comment_spans = _extract_comment_spans(sql)
+    for c_start, c_end in comment_spans:
+        if not (end <= c_start or start >= c_end):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -55,12 +122,15 @@ class SplicingCandidate:
 
 
 def _build_flexible_pattern(sql_fragment: str) -> re.Pattern[str]:
-    """Compile an SQL fragment into a flexible regex matching varied whitespace and casing.
+    r"""Compile an SQL fragment into a flexible regex matching varied whitespace and casing.
 
     Converts tokens into regex elements where word-to-word transitions require at least
-    one whitespace character (\\s+), while transitions involving operators or delimiters
-    allow optional whitespace (\\s*). Function synonyms (e.g. TO_DATE vs DATE) are
+    one whitespace character (\s+), while transitions involving operators or delimiters
+    allow optional whitespace (\s*). Function synonyms (e.g. TO_DATE vs DATE) are
     automatically expanded into equivalent alternatives.
+
+    The 'AS' keyword is treated as optional (e.g. (?:\bAS\s+)? or similar) to allow
+    matching SQL text regardless of whether explicit 'AS' syntax is present or omitted.
 
     Args:
         sql_fragment: SQL string snippet or node SQL representation.
@@ -68,31 +138,48 @@ def _build_flexible_pattern(sql_fragment: str) -> re.Pattern[str]:
     Returns:
         re.Pattern[str]: Compiled case-insensitive regular expression pattern.
     """
-    tokens: list[tuple[str, bool]] = []
+    tokens: list[_Token] = []
     for match in TOKEN_PATTERN.finditer(sql_fragment):
         s = match.group(0)
         if match.group(1) or match.group(2):  # string literal or quoted identifier
-            tokens.append((re.escape(s), False))
+            tokens.append(_Token(re.escape(s), False))
         elif match.group(3):  # word (identifier / keyword / number)
             upper_s = s.upper()
-            if upper_s in FUNCTION_EQUIVALENTS:
+            if upper_s == "AS":
+                tokens.append(_Token(rf"\b{re.escape(s)}\b", True, is_as=True))
+            elif upper_s in FUNCTION_EQUIVALENTS:
                 equiv = "|".join(FUNCTION_EQUIVALENTS[upper_s])
-                tokens.append((rf"\b(?:{equiv})\b", True))
+                tokens.append(_Token(rf"\b(?:{equiv})\b", True))
             else:
-                tokens.append((rf"\b{re.escape(s)}\b", True))
+                tokens.append(_Token(rf"\b{re.escape(s)}\b", True))
         else:  # operator / symbol
-            tokens.append((re.escape(s), False))
+            tokens.append(_Token(re.escape(s), False))
 
     if not tokens:
         # Match nothing
         return re.compile(r"$^")
 
-    parts: list[str] = [tokens[0][0]]
-    for i in range(1, len(tokens)):
-        prev_is_word = tokens[i - 1][1]
-        curr_is_word = tokens[i][1]
-        sep = r"\s+" if (prev_is_word and curr_is_word) else r"\s*"
-        parts.append(sep + tokens[i][0])
+    parts: list[str] = []
+    i = 0
+    while i < len(tokens):
+        # Handle optional AS keyword between tokens (e.g. `) AS sub` or `col AS alias`)
+        if i > 0 and i < len(tokens) - 1 and tokens[i].is_as:
+            prev_token = tokens[i - 1]
+            next_token = tokens[i + 1]
+            sep = r"\s+" if prev_token.is_word else r"\s*"
+            post_sep = r"\s+" if next_token.is_word else r"\s*"
+            parts.append(rf"{sep}(?:\bAS\b{post_sep})?{next_token.pattern}")
+            i += 2  # Consumed both AS and next_token
+            continue
+
+        if i == 0:
+            parts.append(tokens[0].pattern)
+        else:
+            prev_token = tokens[i - 1]
+            curr_token = tokens[i]
+            sep = r"\s+" if (prev_token.is_word and curr_token.is_word) else r"\s*"
+            parts.append(sep + curr_token.pattern)
+        i += 1
 
     return re.compile("".join(parts), re.IGNORECASE)
 
@@ -150,8 +237,8 @@ def _find_scoped_match(
 
     Attempts to locate the match first within a narrow window centered around
     line_number, then within a wider neighborhood, and finally across the entire SQL.
-    Skips any spans that overlap with occupied_spans to allow identical expressions
-    to be matched to distinct locations.
+    Skips any spans that overlap with occupied_spans or intersect with comments
+    to prevent spurious replacements inside user comments.
 
     Args:
         original_sql: Raw SQL text.
@@ -165,6 +252,8 @@ def _find_scoped_match(
     lines = original_sql.splitlines(keepends=True)
     if not lines:
         return None
+
+    comment_spans = _extract_comment_spans(original_sql)
 
     line_starts: list[int] = [0]
     for line in lines[:-1]:
@@ -184,14 +273,18 @@ def _find_scoped_match(
             for m in pattern.finditer(sub_text):
                 abs_s = sub_start + m.start()
                 abs_e = sub_start + m.end()
-                if not _is_overlapping((abs_s, abs_e), occupied_spans):
+                if not _is_overlapping((abs_s, abs_e), occupied_spans) and not _is_in_comment(
+                    original_sql, abs_s, abs_e, comment_spans
+                ):
                     return abs_s, abs_e, m.group(0)
 
     # Phase 2: Fallback to full SQL search
     for m in pattern.finditer(original_sql):
         abs_s = m.start()
         abs_e = m.end()
-        if not _is_overlapping((abs_s, abs_e), occupied_spans):
+        if not _is_overlapping((abs_s, abs_e), occupied_spans) and not _is_in_comment(
+            original_sql, abs_s, abs_e, comment_spans
+        ):
             return abs_s, abs_e, m.group(0)
 
     return None
