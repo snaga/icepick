@@ -32,11 +32,17 @@
 | 構文解析・静的診断 | F-A6 | UNION最適化診断 | 重複排除不要なUNIONからUNION ALLへの置換候補（SNOW-006）検出 | A-6 |
 | 構文解析・静的診断 | F-A7 | 暗黙クロス結合診断 | カンマ区切りFROMによる直積リスク（SNOW-004）検出 | A-7 |
 | 構文解析・静的診断 | F-A8 | 重複テーブルスキャン診断 | 複数CTE間での同一テーブル反復スキャン（SNOW-005）検出 | A-8 |
+| 構文解析・静的診断 | F-A9 | 冗長DISTINCT診断 | GROUP BY・集計関数存在下での無駄なDISTINCT（SNOW-008）検出 | A-9 |
+| 構文解析・静的診断 | F-A10 | QUALIFY平坦化診断 | ウィンドウ関数サブクエリのQUALIFY統合候補（SNOW-009）検出 | A-10 |
+| 構文解析・静的診断 | F-A11 | CTE多重参照診断 | 同一CTEの3回以上参照によるインライン再計算リスク（SNOW-013）検出 | A-11 |
+| 構文解析・静的診断 | F-A12 | 巨大INリスト診断 | 500要素超の巨大INリストによるコンパイル過負荷（SNOW-014）検出 | A-12 |
 | AST置換・最適化 | F-B1 | 決定論的ノード置換 | AST In-place置換による健全ノード維持と局所手術 | B-1 |
 | AST置換・最適化 | F-B2 | Derived Table平坦化 | ネストサブクエリのトップレベルCTE外出し・平坦化 | B-2 |
 | AST置換・最適化 | F-B3 | エージェント連携リライト支援 | ast-digger構文特定情報を含む処方箋とAST構文検証 | B-3 |
 | AST置換・最適化 | F-B4 | UNION ALL置換 | UNIONからUNION ALLへの決定論的ルール置換 | B-4 |
 | AST置換・最適化 | F-B5 | 明示的JOIN置換 | 暗黙クロス結合からINNER JOIN等への決定論的置換 | B-5 |
+| AST置換・最適化 | F-B6 | DISTINCTノード削除 | GROUP BY存在下でのDISTINCT安全pop削除 | B-6 |
+| AST置換・最適化 | F-B7 | QUALIFY句注入平坦化 | サブクエリ解消とQUALIFY句への条件統合置換 | B-7 |
 | 処方箋駆動最適化 | F-C1 | 構造化処方箋診断 | icepick diagによる処方箋ID採番とRichカード/JSON出力 | C-1 |
 | 処方箋駆動最適化 | F-C2 | 処方箋ID選択型差分生成 | icepick diffによる特定処方箋（--rx）に絞り込んだ局所Diff生成 | C-2 |
 | 処方箋駆動最適化 | F-C3 | 処方箋ID選択型ファイル適用 | icepick fixによる特定処方箋（--rx）の元ファイル直接適用 | C-3 |
@@ -181,12 +187,16 @@ class PrescriptionPlan:
   - `UnionToUnionAllRule` (`SNOW-006`): 重複排除不要な結合における `exp.Union`（`distinct=True`）を検出し、`distinct=False`（UNION ALL）の置換ノードを `suggested_replacement` にセット。
   - `ImplicitCrossJoinRule` (`SNOW-004`): `exp.From` 内のカンマ区切り複数テーブル参照を検出し、明示的な `CROSS JOIN` ノードを `suggested_replacement` にセット。
   - `DuplicateTableScanRule` (`SNOW-005`): 同一クエリ内の複数 CTE 間で同一テーブルの重複スキャンを検出し、共通 CTE 集約の警告を発行。
+  - `RedundantDistinctRule` (`SNOW-008`): `exp.Select` 内で `group` 句が存在する、または集計関数を含むブロックでの `distinct` を検知し、`target_node=select_node.args.get("distinct")`, `suggested_replacement=None`（pop削除）をセット。
+  - `QualifyFlatteningRule` (`SNOW-009`): ウィンドウ関数を持つサブクエリを外側 `WHERE` 句（`rn = 1` 等）で囲んでいる構造を検出し、サブクエリを解消して内側クエリに `QUALIFY` 条件を注入した置換ノードをセット。
+  - `CteMultiReferenceRule` (`SNOW-013`): 同一 CTE が 3 回以上参照されている箇所を検知し、一時テーブル（TEMPORARY TABLE）マテリアライズ検討を促す警告（重要度 `LOW`、手動対応）を発行。
+  - `HugeInListRule` (`SNOW-014`): IN 句の引数リストが 500 要素を超えるリテラル集合を検知し、`ARRAY_CONSTRUCT` や一時テーブル JOIN を促す警告（重要度 `MEDIUM`、手動対応）を発行。
 
 ### 4.2 `ASTPatcher` & `SubqueryToCTE` (`icepick/patcher/`)
-- 対応要件: B-1, B-2, B-4, B-5
+- 対応要件: B-1, B-2, B-4, B-5, B-6, B-7
 - **In-place置換**:
-  - `issue.suggested_replacement` が存在する場合: `issue.target_node.replace(issue.suggested_replacement)`（`SNOW-001`, `SNOW-006`, `SNOW-004`）
-  - `suggested_replacement` が None の場合: `issue.target_node.pop()`（`SNOW-003`）
+  - `issue.suggested_replacement` が存在する場合: `issue.target_node.replace(issue.suggested_replacement)`（`SNOW-001`, `SNOW-006`, `SNOW-004`, `SNOW-009`）
+  - `suggested_replacement` が None の場合: `issue.target_node.pop()` または `select_node.set("distinct", None)`（`SNOW-003`, `SNOW-008`）
 - **サブクエリのCTE平坦化 (`SubqueryToCTE`)**:
   1. 対象サブクエリの内部SELECT (`subquery.this`) を取得。
   2. 一意なCTE別名（例: `cte_<alias>_<index>`）を決定。
