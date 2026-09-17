@@ -175,9 +175,9 @@ class ImplicitCrossJoinRule(BaseRule):
                     f"Implicit cross join detected between "
                     f"'{lhs_name}' and '{rhs_name}'. "
                     f"The comma-separated FROM clause produces a full Cartesian "
-                    f"product ({lhs_name} × {rhs_name}) before any WHERE filter "
+                    f"product ({lhs_name} * {rhs_name}) before any WHERE filter "
                     f"is applied, which can be extremely expensive. "
-                    f"Rewrite using an explicit JOIN … ON or JOIN … USING clause."
+                    f"Rewrite using an explicit JOIN ... ON or JOIN ... USING clause."
                 )
 
                 issues.append(

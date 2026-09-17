@@ -20,14 +20,17 @@ class TestCliDiag:
     """Test suite for the 'icepick diag' command."""
 
     def test_cli_diag_clean_sql(self, tmp_path: Path) -> None:
-        """Verify that a clean query without anti-patterns exits with 0 and prints clean message."""
+        """Verify that a clean query without anti-patterns exits with 0 and prints [OK] clean message (CP932 safe)."""
         sql_file = tmp_path / "clean.sql"
         sql_file.write_text("SELECT id, name FROM users WHERE id = 10", encoding="utf-8")
 
         result = runner.invoke(app, ["diag", str(sql_file)])
         assert result.exit_code == 0
-        assert "No optimization issues found" in result.output
+        assert "[OK] No optimization issues found" in result.output
         assert "Clean query!" in result.output
+        # Verify Windows CP932 / Shift_JIS compatibility (no UnicodeEncodeError on Japanese Windows)
+        encoded = result.output.encode("cp932")
+        assert len(encoded) > 0
 
     def test_cli_diag_issues_text_output(self, tmp_path: Path) -> None:
         """Verify that a query with anti-patterns prints Rich cards and exits with 1."""

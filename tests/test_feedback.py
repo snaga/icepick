@@ -157,6 +157,9 @@ class TestFeedbackCli:
             ],
         )
         assert result.exit_code == 0
+        assert "[OK] Feedback recorded successfully to" in result.output
+        # Verify Windows CP932 / Shift_JIS compatibility
+        assert len(result.output.encode("cp932")) > 0
 
         record = json.loads(log_file.read_text(encoding="utf-8").strip())
         assert record["category"] == "doc"

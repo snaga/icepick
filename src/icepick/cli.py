@@ -228,7 +228,7 @@ def diag(
         raise typer.Exit(code=1)
 
     if plan.issues_count == 0:
-        console.print(f"[green]✓ No optimization issues found in {file}. Clean query![/green]")
+        console.print(f"[green][OK] No optimization issues found in {file}. Clean query![/green]")
         raise typer.Exit(code=0)
 
     console.print(
@@ -558,7 +558,7 @@ def verify(
         except Exception as exc:
             err_console.print(f"[bold red]Error writing output file {output}:[/bold red] {exc}")
             raise typer.Exit(code=2) from exc
-        console.print(f"[bold green]✓ Verification SQL saved to {output}[/bold green]")
+        console.print(f"[bold green][OK] Verification SQL saved to {output}[/bold green]")
     else:
         typer.echo(sql)
 
@@ -609,7 +609,7 @@ def feedback(
         typer.echo(json.dumps(entry.to_dict(), ensure_ascii=False, indent=2))
     else:
         console.print(
-            f"[bold green]✓ Feedback recorded successfully to {recorder.log_path}[/bold green]",
+            f"[bold green][OK] Feedback recorded successfully to {recorder.log_path}[/bold green]",
             soft_wrap=True,
         )
     raise typer.Exit(code=0)

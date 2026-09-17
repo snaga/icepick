@@ -87,8 +87,10 @@ class TestVerifyCLI:
 
         result = runner.invoke(app, ["verify", str(orig_file), str(opt_file), "-o", str(out_file)])
         assert result.exit_code == 0
-        assert "Verification SQL saved to" in result.output
+        assert "[OK] Verification SQL saved to" in result.output
         assert out_file.exists()
+        # Verify Windows CP932 / Shift_JIS compatibility
+        assert len(result.output.encode("cp932")) > 0
         saved_sql = out_file.read_text(encoding="utf-8")
         assert "WITH orig AS (" in saved_sql
         assert "EXCEPT" in saved_sql
