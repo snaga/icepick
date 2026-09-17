@@ -7,6 +7,7 @@ from icepick.linter.rules.snow_004_implicit_cross_join import ImplicitCrossJoinR
 from icepick.linter.rules.snow_005_duplicate_scan import DuplicateTableScanRule
 from icepick.linter.rules.snow_006_union import UnionToUnionAllRule
 from icepick.linter.rules.snow_007_nested_subquery import NestedSubqueryRule
+from icepick.linter.rules.snow_008_redundant_distinct import RedundantDistinctRule
 
 __all__ = [
     "CorrelatedSubqueryRule",
@@ -14,6 +15,8 @@ __all__ = [
     "ImplicitCrossJoinRule",
     "NestedSubqueryRule",
     "NonSargableRule",
+    "RedundantDistinctRule",
     "RedundantSortRule",
     "UnionToUnionAllRule",
 ]
+
