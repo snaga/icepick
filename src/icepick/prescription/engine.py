@@ -72,7 +72,7 @@ class PrescriptionEngine:
 
         Args:
             linter_engine: Underlying LinterEngine for rule evaluation.
-                If None, a default LinterEngine loaded with SNOW-001 through SNOW-011 is created.
+                If None, a default LinterEngine loaded with SNOW-001 through SNOW-012 is created.
             dialect: SQL dialect for parsing and generating code snippets (default: 'snowflake').
         """
         self.linter_engine: LinterEngine = (

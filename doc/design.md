@@ -418,7 +418,7 @@ class PrescriptionPlan:
      - **Input**: `sql_text: str`, `file_path: str`
      - **Processing**:
        1. `sqlglot` を用いて Snowflake AST を構築。
-       2. Linter ルール群（`SNOW-001`〜`SNOW-007`等）を実行し、問題ノード・改善提案を抽出。
+       2. Linter ルール群（`SNOW-001`〜`SNOW-012`等）を実行し、問題ノード・改善提案を抽出。
        3. 各検出問題に対して一意な処方箋ID（`RX-001`, `RX-002`...）を採番し、所属CTE、ノード種別、操作種別（DELETE/REPLACE/INSERT）、元のSQL断片、推奨修正SQL断片、Why（理由）、期待効果をカプセル化した `Prescription` リストを構築。
      - **Output**: `PrescriptionPlan` インスタンス
   2. `PrescriptionEngine.generate_diff(sql_text: str, plan: PrescriptionPlan, selected_ids: list[str] | None = None) -> str`:
