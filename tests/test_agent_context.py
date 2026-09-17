@@ -135,7 +135,7 @@ class TestAgentContextUnit:
         assert commands["verify"]["options"]["--dialect"]["choices"] == expected_dialects
 
     def test_rules_coverage(self) -> None:
-        """Verify that all rules from SNOW-001 to SNOW-011 are cataloged."""
+        """Verify that all rules from SNOW-001 to SNOW-012 are cataloged."""
         ctx = get_agent_context()
         rules = ctx["rules"]
         rule_ids = {r["id"] for r in rules}
@@ -152,6 +152,7 @@ class TestAgentContextUnit:
             "SNOW-009",
             "SNOW-010",
             "SNOW-011",
+            "SNOW-012",
         }
         assert expected_rule_ids.issubset(rule_ids)
 
@@ -218,6 +219,11 @@ class TestAgentContextUnit:
         assert snow_011["name"] == "HugeInListRule"
         assert snow_011["can_auto_fix"] is False
         assert snow_011["severity"] == "MEDIUM"
+
+        snow_012 = next(r for r in rules if r["id"] == "SNOW-012")
+        assert snow_012["name"] == "SelectStarRule"
+        assert snow_012["can_auto_fix"] is False
+        assert snow_012["severity"] == "LOW"
 
     def test_environment_variables_schema(self) -> None:
         """Verify that environment variables expose supported ICEPICK_ config vars."""

@@ -60,6 +60,7 @@ Snowflake 上で稼働する夜間バッチや dbt モデルなどの複雑な S
 | **`SNOW-009`** | **Window Function Flattening to QUALIFY** | `MEDIUM` | ✅ | 外側 `WHERE` 句でウィンドウ関数の結果エイリアスを絞り込んでいるサブクエリを検知し、Snowflake ネイティブの `QUALIFY` 句を用いた単一クエリへ自動平坦化。 |
 | **`SNOW-010`** | **CTE Multiple References (Materialization Warning)** | `LOW` | ⚠️ (手動/Agent) | 同一クエリ内で 3 回以上参照される CTE（インライン再計算とメモリSpill要因）を検知し、`CREATE TEMPORARY TABLE` へのマテリアライズ検討を警告。 |
 | **`SNOW-011`** | **Huge IN-List Optimizer Overload** | `MEDIUM` | ⚠️ (手動/Agent) | 500 要素を超える巨大なリテラル IN リスト（Snowflake オプティマイザのコンパイル遅延要因）を検知し、`ARRAY_CONSTRUCT` や一時テーブル JOIN へのリライトを警告。 |
+| **`SNOW-012`** | **Wildcard SELECT * in Pipeline or Join** | `LOW` | ⚠️ (手動/Agent) | 中間 CTE、JOIN 句、または `DISTINCT` を伴うクエリでの不要な全列展開（`SELECT *`）によるメモリ肥大化・Spill リスクを検知し、必要カラムのみの明示指定を推奨。 |
 
 ---
 
@@ -77,7 +78,7 @@ flowchart TD
     CmdDiag --> Parser["icepick.parser.SQLParser"]
     Parser --> AST["Snowflake Root AST"]
     AST --> Linter["icepick.linter.LinterEngine"]
-    Linter --> Rules["Rules (SNOW-001 ~ SNOW-011)"]
+    Linter --> Rules["Rules (SNOW-001 ~ SNOW-012)"]
     Rules --> Issues["List[DiagnosticIssue]"]
     Issues --> RxEngine["icepick.prescription.PrescriptionEngine"]
     RxEngine --> Plan["PrescriptionPlan (RX-001, RX-002...)"]

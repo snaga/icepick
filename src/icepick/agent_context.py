@@ -322,6 +322,13 @@ def get_agent_context() -> dict[str, Any]:
                 "description": "Detects huge IN-lists exceeding 500 literals overloading Snowflake query compilation and memory.",
                 "can_auto_fix": False,
             },
+            {
+                "id": "SNOW-012",
+                "name": "SelectStarRule",
+                "severity": "LOW",
+                "description": "Detects wildcard 'SELECT *' in intermediate CTEs, JOINs, or DISTINCT that project unnecessary columns and elevate memory spill risk.",
+                "can_auto_fix": False,
+            },
         ],
         "environment_variables": {
             "ICEPICK_DIALECT": {

@@ -38,13 +38,14 @@ RULE_IMPACT_MAP: dict[str, str] = {
     "SNOW-009": "Flattens nested subquery using native QUALIFY clause; improves optimizer efficiency and readability.",
     "SNOW-010": "Avoids redundant CTE inlining re-computations and memory spills; consider TEMPORARY TABLE materialization.",
     "SNOW-011": "Prevents Snowflake optimizer compilation overload from huge literal list; consider ARRAY_CONSTRUCT or temporary table.",
+    "SNOW-012": "Avoids unnecessary column projection and memory spill; consider specifying only required columns.",
 }
 
 DEFAULT_IMPACT = "Improves query execution performance and resource efficiency"
 
 
 def create_default_linter_engine(config: Config | None = None) -> LinterEngine:
-    """Create and configure a LinterEngine with all standard SNOW rules (001-011).
+    """Create and configure a LinterEngine with all standard SNOW rules (001-012).
 
     Args:
         config: Optional configuration instance.

@@ -23,6 +23,7 @@ from icepick.linter.rules import (
     QualifyFlatteningRule,
     RedundantDistinctRule,
     RedundantSortRule,
+    SelectStarRule,
     UnionToUnionAllRule,
 )
 
@@ -38,6 +39,7 @@ DEFAULT_RULES: tuple[type[BaseRule], ...] = (
     QualifyFlatteningRule,
     CteMultiReferenceRule,
     HugeInListRule,
+    SelectStarRule,
 )
 
 

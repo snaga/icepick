@@ -210,10 +210,10 @@ def test_linter_engine_clean_query() -> None:
 
 
 def test_linter_engine_default_rules() -> None:
-    """Test LinterEngine initializes with all 11 default rules when none are provided."""
+    """Test LinterEngine initializes with all 12 default rules when none are provided."""
     engine = LinterEngine()
-    assert len(engine.rules) == 11
-    assert len(DEFAULT_RULES) == 11
+    assert len(engine.rules) == 12
+    assert len(DEFAULT_RULES) == 12
 
     rule_ids = {rule.rule_id for rule in engine.rules}
     expected_ids = {
@@ -228,6 +228,7 @@ def test_linter_engine_default_rules() -> None:
         "SNOW-009",
         "SNOW-010",
         "SNOW-011",
+        "SNOW-012",
     }
     assert rule_ids == expected_ids
 

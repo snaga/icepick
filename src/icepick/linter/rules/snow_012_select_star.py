@@ -45,9 +45,9 @@ class SelectStarRule(BaseRule):
                 if isinstance(expr, exp.AggFunc) or expr.find_ancestor(exp.AggFunc) is not None:
                     continue
 
-                if isinstance(expr, exp.Star):
-                    star_nodes.append(expr)
-                elif isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star):
+                if isinstance(expr, exp.Star) or (
+                    isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star)
+                ):
                     star_nodes.append(expr)
 
             if not star_nodes:
